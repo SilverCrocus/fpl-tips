@@ -1,0 +1,81 @@
+[project]
+name = "fpltips"
+version = "0.1.0"
+description = "FPL Transfer & Strategy Recommender using ML and betting odds"
+readme = "README.md"
+requires-python = ">=3.9"
+dependencies = [
+    # Core
+    "pandas>=2.0.0",
+    "numpy>=1.24.0",
+    "requests>=2.31.0",
+    "aiohttp>=3.8.0",
+    
+    # Machine Learning
+    "scikit-learn>=1.3.0",
+    "scipy>=1.10.0",
+    
+    # Data Storage
+    "sqlalchemy>=2.0.0",
+    "psycopg2-binary>=2.9.0",
+    
+    # Data Processing
+    "pyarrow>=12.0.0",
+    "pyyaml>=6.0",
+    "python-dateutil>=2.8.2",
+    
+    # Visualization
+    "matplotlib>=3.7.0",
+    "seaborn>=0.12.0",
+    "plotly>=5.14.0",
+    
+    # FPL API
+    "fpl>=0.6.0",
+    
+    # Utilities
+    "tqdm>=4.65.0",
+    "python-dotenv>=1.0.0",
+    "loguru>=0.7.0",
+    "ratelimit>=2.2.1",
+    "click>=8.0.0",
+    "rich>=13.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.3.0",
+    "pytest-asyncio>=0.21.0",
+    "black>=23.3.0",
+    "ruff>=0.1.0",
+    "ipykernel>=6.25.0",
+    "jupyter>=1.0.0",
+]
+web = [
+    "streamlit>=1.22.0",
+    "flask>=2.3.0",
+]
+
+[project.scripts]
+fpl = "src.main:cli"
+fpl-test = "test_odds_api:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+select = ["E", "F", "I", "UP"]
+ignore = ["E501"]
+
+[tool.black]
+line-length = 100
+target-version = ['py39']
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"

@@ -1,0 +1,106 @@
+# FPL Data Pipeline Configuration
+
+# Database settings
+database:
+  path: "data/processed/fpl_data.db"
+  backup_enabled: true
+  backup_retention_days: 30
+
+# Data paths
+paths:
+  raw_data: "data/raw"
+  processed_data: "data/processed"
+  cache: "data/cache"
+  logs: "logs"
+
+# API settings
+apis:
+  fpl:
+    base_url: "https://fantasy.premierleague.com/api"
+    rate_limit: 60  # requests per minute
+    timeout: 30  # seconds
+    retry_attempts: 3
+    
+  odds:
+    # Configure your odds API here
+    base_url: "https://api.the-odds-api.com/v4"
+    # API key should be set via ODDS_API_KEY environment variable
+    rate_limit: 30
+    timeout: 30
+    
+  elo_insights:
+    repo_url: "https://github.com/vaastav/Fantasy-Premier-League"
+    local_path: "data/raw/elo_insights"
+
+# Data processing settings
+processing:
+  chunk_size: 10000
+  parallel_workers: 4
+  memory_limit_mb: 2048
+  
+# Data quality thresholds
+quality:
+  min_completeness: 0.80  # 80% minimum data completeness
+  min_accuracy: 0.95      # 95% accuracy for validation rules
+  max_staleness_hours: 24 # Maximum age of data in hours
+  outlier_threshold: 3    # Standard deviations for outlier detection
+
+# Pipeline modes
+modes:
+  incremental:
+    enabled: true
+    frequency_hours: 4
+    
+  full_refresh:
+    enabled: true
+    frequency_days: 7
+    
+# Feature engineering settings
+features:
+  rolling_windows: [3, 5, 10]  # Games
+  lag_periods: [1, 2, 3]       # Games
+  exponential_smoothing_alpha: 0.3
+  
+# Caching settings
+cache:
+  enabled: true
+  ttl_hours: 24
+  max_size_mb: 500
+  
+# Logging settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_rotation: "daily"
+  retention_days: 30
+
+# Monitoring and alerts
+monitoring:
+  enabled: true
+  metrics_port: 8080
+  alert_email: "your-email@example.com"
+  
+  thresholds:
+    pipeline_duration_seconds: 300
+    error_rate_percent: 5
+    data_quality_score: 0.8
+
+# Season settings
+season:
+  current: "2024-25"
+  start_date: "2024-08-16"
+  end_date: "2025-05-25"
+  total_gameweeks: 38
+
+# Model settings (for future use)
+model:
+  version: "v1"
+  scoring_weights:
+    position_specific: true
+    optimize_method: "bayesian"
+    
+# Development settings
+development:
+  debug_mode: false
+  sample_data: false
+  test_gameweek: 10
