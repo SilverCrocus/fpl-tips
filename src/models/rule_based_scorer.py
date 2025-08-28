@@ -49,7 +49,10 @@ class ScoringWeights:
                 'prob_clean_sheet': 2.0,
                 'saves_per_game': 0.5,
                 'team_elo': 0.001,
-                'fixture_difficulty': -0.5,
+                'fixture_difficulty': -0.3,  # Current GW
+                'fixture_diff_next2': -0.4,  # Next 2 GWs more important
+                'fixture_diff_next5': -0.2,  # Next 5 GWs
+                'easy_fixtures_next5': 0.5,  # Bonus for easy games ahead
                 'form': 0.3,
                 'value_ratio': 0.2
             },
@@ -59,7 +62,10 @@ class ScoringWeights:
                 'prob_assist': 1.2,
                 'expected_assists': 1.5,
                 'team_elo': 0.001,
-                'fixture_difficulty': -0.5,
+                'fixture_difficulty': -0.3,
+                'fixture_diff_next2': -0.4,
+                'fixture_diff_next5': -0.2,
+                'easy_fixtures_next5': 0.5,
                 'form': 0.4,
                 'threat': 0.01,
                 'value_ratio': 0.3
@@ -72,7 +78,10 @@ class ScoringWeights:
                 'creativity': 0.02,
                 'threat': 0.02,
                 'form': 0.5,
-                'fixture_difficulty': -0.4,
+                'fixture_difficulty': -0.2,
+                'fixture_diff_next2': -0.3,
+                'fixture_diff_next5': -0.2,
+                'easy_fixtures_next5': 0.4,
                 'value_ratio': 0.3,
                 'ict_per_90': 0.01
             },
@@ -82,7 +91,10 @@ class ScoringWeights:
                 'prob_assist': 1.5,
                 'threat': 0.03,
                 'form': 0.6,
-                'fixture_difficulty': -0.3,
+                'fixture_difficulty': -0.2,
+                'fixture_diff_next2': -0.3,
+                'fixture_diff_next5': -0.1,
+                'easy_fixtures_next5': 0.3,
                 'value_ratio': 0.2,
                 'goal_involvement': 2.0,
                 'minutes': 0.01

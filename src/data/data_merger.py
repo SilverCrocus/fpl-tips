@@ -43,6 +43,7 @@ class DataMerger:
                 -- Player info
                 player_name TEXT,
                 position TEXT,
+                team INTEGER,
                 team_name TEXT,
                 team_short TEXT,
                 price REAL,
@@ -84,6 +85,10 @@ class DataMerger:
                 opponent_elo REAL,
                 elo_diff REAL,
                 fixture_difficulty INTEGER,
+                fixture_diff_next2 REAL,
+                fixture_diff_next5 REAL,
+                easy_fixtures_next5 INTEGER,
+                hard_fixtures_next5 INTEGER,
                 is_home INTEGER,
                 -- Derived features
                 value_ratio REAL,
@@ -188,13 +193,21 @@ class DataMerger:
             odds_columns.append('is_real_odds')
         
         # Merge on player_id
-        merged = fpl_data.merge(
-            odds_data[odds_columns],
-            left_on='id',
-            right_on='player_id',
-            how='left',
-            suffixes=('', '_odds')
-        )
+        if 'player_id' in odds_data.columns:
+            # If odds has player_id, merge and drop the duplicate
+            merge_cols = [col for col in odds_columns if col != 'player_id']
+            merged = fpl_data.merge(
+                odds_data[['player_id'] + merge_cols],
+                left_on='id',
+                right_on='player_id',
+                how='left',
+                suffixes=('', '_odds')
+            )
+            # Drop the duplicate player_id column from odds
+            merged = merged.drop('player_id', axis=1)
+        else:
+            # No player_id column in odds
+            merged = fpl_data
         
         # Mark players with real odds vs those without
         # DO NOT fill NaN values - we want to exclude players without real odds
@@ -241,6 +254,89 @@ class DataMerger:
         logger.info(f"Added Elo ratings to {len(data)} records")
         return data
         
+    def add_fixture_difficulty(self, data: pd.DataFrame, 
+                               fixtures_data: pd.DataFrame,
+                               current_gameweek: int) -> pd.DataFrame:
+        """Add fixture difficulty ratings for upcoming games
+        
+        Args:
+            data: Player data DataFrame
+            fixtures_data: Fixtures DataFrame with difficulty ratings
+            current_gameweek: Current gameweek number
+            
+        Returns:
+            DataFrame with fixture difficulty columns
+        """
+        # Create team ID mapping from player data
+        team_mapping = {}
+        if 'team' in data.columns and 'team_name' in data.columns:
+            team_data = data[['team', 'team_name']].drop_duplicates()
+            team_mapping = dict(zip(team_data['team_name'], team_data['team']))
+        
+        # Initialize difficulty columns
+        data['fixture_difficulty'] = 3  # Default medium
+        data['fixture_diff_next2'] = 3.0
+        data['fixture_diff_next5'] = 3.0
+        data['easy_fixtures_next5'] = 0  # Count of easy fixtures (diff <= 2)
+        data['hard_fixtures_next5'] = 0  # Count of hard fixtures (diff >= 4)
+        
+        # Process fixtures for each team
+        for team_name, team_id in team_mapping.items():
+            # Get team's upcoming fixtures
+            team_fixtures_home = fixtures_data[
+                (fixtures_data['team_h'] == team_id) & 
+                (fixtures_data['event'] >= current_gameweek) &
+                (fixtures_data['event'] <= current_gameweek + 5)
+            ].copy()
+            
+            team_fixtures_away = fixtures_data[
+                (fixtures_data['team_a'] == team_id) & 
+                (fixtures_data['event'] >= current_gameweek) &
+                (fixtures_data['event'] <= current_gameweek + 5)
+            ].copy()
+            
+            # Add difficulty for home games
+            team_fixtures_home['difficulty'] = team_fixtures_home['team_h_difficulty']
+            team_fixtures_home['is_home'] = 1
+            
+            # Add difficulty for away games
+            team_fixtures_away['difficulty'] = team_fixtures_away['team_a_difficulty']
+            team_fixtures_away['is_home'] = 0
+            
+            # Combine home and away fixtures
+            all_fixtures = pd.concat([team_fixtures_home, team_fixtures_away])
+            all_fixtures = all_fixtures.sort_values('event')
+            
+            if not all_fixtures.empty:
+                # Get difficulty ratings
+                difficulties = all_fixtures['difficulty'].values
+                
+                # Current gameweek difficulty
+                current_gw_fixtures = all_fixtures[all_fixtures['event'] == current_gameweek]
+                if not current_gw_fixtures.empty:
+                    current_diff = current_gw_fixtures['difficulty'].iloc[0]
+                    is_home = current_gw_fixtures['is_home'].iloc[0]
+                    data.loc[data['team_name'] == team_name, 'fixture_difficulty'] = int(current_diff)
+                    data.loc[data['team_name'] == team_name, 'is_home'] = int(is_home)
+                
+                # Next 2 gameweeks average
+                if len(difficulties) >= 2:
+                    data.loc[data['team_name'] == team_name, 'fixture_diff_next2'] = float(np.mean(difficulties[:2]))
+                elif len(difficulties) > 0:
+                    data.loc[data['team_name'] == team_name, 'fixture_diff_next2'] = float(difficulties[0])
+                
+                # Next 5 gameweeks average
+                if len(difficulties) > 0:
+                    data.loc[data['team_name'] == team_name, 'fixture_diff_next5'] = float(np.mean(difficulties[:5]))
+                    # Count easy and hard fixtures
+                    easy_count = sum(1 for d in difficulties[:5] if d <= 2)
+                    hard_count = sum(1 for d in difficulties[:5] if d >= 4)
+                    data.loc[data['team_name'] == team_name, 'easy_fixtures_next5'] = int(easy_count)
+                    data.loc[data['team_name'] == team_name, 'hard_fixtures_next5'] = int(hard_count)
+        
+        logger.info(f"Added fixture difficulty for {len(team_mapping)} teams")
+        return data
+        
     def calculate_derived_features(self, data: pd.DataFrame) -> pd.DataFrame:
         """Calculate derived features for modeling
         
@@ -274,11 +370,14 @@ class DataMerger:
         
         # Fixture difficulty from Elo difference
         data['elo_diff'] = data['team_elo'] - data['opponent_elo']
-        data['fixture_difficulty'] = pd.cut(
+        # Convert pd.cut categorical to regular integers to avoid Series type in database
+        fixture_diff_categorical = pd.cut(
             data['elo_diff'],
             bins=[-np.inf, -100, -50, 50, 100, np.inf],
             labels=[5, 4, 3, 2, 1]  # 5 = very hard, 1 = very easy
-        ).astype(int)
+        )
+        # Convert to regular integers, not categorical
+        data['fixture_difficulty'] = fixture_diff_categorical.astype('int64')
         
         # Position-specific features
         data['is_goalkeeper'] = (data['position'] == 'GK').astype(int)
@@ -351,6 +450,7 @@ class DataMerger:
     def create_unified_dataset(self, fpl_data: pd.DataFrame,
                              odds_data: Optional[pd.DataFrame] = None,
                              elo_data: Optional[pd.DataFrame] = None,
+                             fixtures_data: Optional[pd.DataFrame] = None,
                              gameweek: int = 1,
                              season: str = "2024-25") -> pd.DataFrame:
         """Create unified dataset from all sources
@@ -359,6 +459,7 @@ class DataMerger:
             fpl_data: FPL player data
             odds_data: Betting odds data
             elo_data: Team Elo ratings
+            fixtures_data: Fixtures with difficulty ratings
             gameweek: Gameweek number
             season: Season identifier
             
@@ -391,6 +492,17 @@ class DataMerger:
             unified['team_elo'] = 1500
             unified['opponent_elo'] = 1500
             
+        # Add fixture difficulty if available
+        if fixtures_data is not None and not fixtures_data.empty:
+            unified = self.add_fixture_difficulty(unified, fixtures_data, gameweek)
+        else:
+            # Default to medium difficulty if no fixture data
+            unified['fixture_difficulty'] = 3
+            unified['fixture_diff_next2'] = 3.0  # Average of next 2 games
+            unified['fixture_diff_next5'] = 3.0  # Average of next 5 games
+            unified['opponent_team'] = 'Unknown'
+            unified['is_home'] = 0
+            
         # Calculate derived features
         unified = self.calculate_derived_features(unified)
         
@@ -407,16 +519,17 @@ class DataMerger:
         # Select final columns
         final_columns = [
             'player_id', 'gameweek', 'season', 'player_name', 'position',
-            'team_name', 'price', 'price_change', 'total_points', 'gameweek_points',
+            'team', 'team_name', 'price', 'price_change', 'total_points', 'gameweek_points',
             'minutes', 'goals_scored', 'assists', 'clean_sheets', 'goals_conceded',
             'saves', 'bonus', 'bps', 'influence', 'creativity', 'threat', 'ict_index',
             'expected_goals', 'expected_assists', 'expected_goal_involvements',
             'form', 'selected_by_percent', 'transfers_in', 'transfers_out',
             'odds_goal', 'odds_assist', 'prob_goal', 'prob_assist',
-            'team_elo', 'opponent_elo', 'fixture_difficulty',
+            'team_elo', 'opponent_elo', 'fixture_difficulty', 'fixture_diff_next2',
+            'fixture_diff_next5', 'easy_fixtures_next5', 'hard_fixtures_next5',
             'value_ratio', 'points_per_million', 'recent_form_5', 'ownership_delta',
             'goal_involvement', 'ict_per_90', 'goals_vs_xg', 'assists_vs_xa',
-            'is_available', 'data_quality', 'has_odds_data', 'has_elo_data'
+            'is_available', 'data_quality', 'has_odds_data', 'has_elo_data', 'is_home'
         ]
         
         # Keep only available columns
@@ -426,6 +539,46 @@ class DataMerger:
         logger.info(f"Created unified dataset: {len(unified)} records, {len(unified.columns)} features")
         return unified
         
+    def _clean_dataframe_for_db(self, data: pd.DataFrame) -> pd.DataFrame:
+        """Clean DataFrame to ensure all values are database-compatible
+        
+        Args:
+            data: DataFrame to clean
+            
+        Returns:
+            Cleaned DataFrame
+        """
+        df_clean = data.copy()
+        
+        # Ensure no Series or complex objects in cells
+        for col in df_clean.columns:
+            try:
+                # Convert categorical to regular types (from pd.cut, etc.)
+                if pd.api.types.is_categorical_dtype(df_clean[col]):
+                    # Check if categories are numeric
+                    if pd.api.types.is_numeric_dtype(df_clean[col].cat.categories):
+                        df_clean[col] = df_clean[col].astype('int64')
+                    else:
+                        df_clean[col] = df_clean[col].astype('object')
+                        
+                # Check for any Series values in the column
+                if df_clean[col].apply(lambda x: isinstance(x, pd.Series)).any():
+                    df_clean[col] = df_clean[col].apply(
+                        lambda x: x.iloc[0] if isinstance(x, pd.Series) and len(x) > 0 else x
+                    )
+                    
+                # Convert numpy types
+                if df_clean[col].dtype.name.startswith('int'):
+                    df_clean[col] = df_clean[col].astype(int, errors='ignore')
+                elif df_clean[col].dtype.name.startswith('float'):
+                    df_clean[col] = df_clean[col].astype(float, errors='ignore')
+                    
+            except Exception as e:
+                logger.debug(f"Could not clean column {col}: {e}")
+                pass
+                
+        return df_clean
+    
     def save_to_database(self, data: pd.DataFrame, table: str = "player_gameweek_stats"):
         """Save data to SQLite database with transaction management
         
@@ -433,10 +586,65 @@ class DataMerger:
             data: DataFrame to save
             table: Table name
         """
+        # Clean data for database compatibility
+        data = self._clean_dataframe_for_db(data)
+        
+        # Make sure we have the key columns
+        if 'gameweek' not in data.columns or 'season' not in data.columns:
+            logger.warning("Missing gameweek or season columns, cannot save to database")
+            return
+            
+        # Check for problematic columns with Series values
+        logger.info(f"Data columns before cleaning: {data.columns.tolist()}")
+        logger.info(f"Data shape: {data.shape}")
+        
+        # Check for duplicate column names
+        if data.columns.duplicated().any():
+            logger.warning(f"Duplicate columns found: {data.columns[data.columns.duplicated()].tolist()}")
+            # Drop duplicate columns
+            data = data.loc[:, ~data.columns.duplicated(keep='first')]
+            logger.info(f"Data shape after removing duplicate columns: {data.shape}")
+        
+        # Debug which columns have issues
+        for col in data.columns:
+            first_val = data[col].iloc[0] if len(data) > 0 else None
+            if isinstance(first_val, pd.Series):
+                logger.warning(f"Column '{col}' contains Series objects - converting to scalar")
+                # Fix the column by extracting scalar values
+                data[col] = data[col].apply(lambda x: x.iloc[0] if isinstance(x, pd.Series) else x)
+        
+        # Remove any duplicate player_id records (keep first)
+        # But ONLY if there are actual duplicates, not if all records have the same Series value
+        if 'player_id' in data.columns:
+            before_count = len(data)
+            # First ensure player_id values are scalar, not Series
+            if data['player_id'].apply(lambda x: isinstance(x, pd.Series)).any():
+                logger.warning("player_id still contains Series, extracting values...")
+                data['player_id'] = data['player_id'].apply(lambda x: x.iloc[0] if isinstance(x, pd.Series) else x)
+            
+            # Now check for real duplicates based on actual player_id values
+            data = data.drop_duplicates(subset=['player_id', 'gameweek', 'season'], keep='first')
+            if before_count != len(data):
+                logger.warning(f"Removed {before_count - len(data)} duplicate player records")
+            logger.info(f"Final data shape after deduplication: {data.shape}")
+            
         # Start transaction
         self.conn.execute("BEGIN TRANSACTION")
         
         try:
+            # Delete existing records for this gameweek/season to avoid duplicates
+            if 'player_id' in data.columns and not data.empty:
+                gameweek = data['gameweek'].iloc[0]
+                season = data['season'].iloc[0]
+                
+                delete_query = f"""
+                    DELETE FROM {table}
+                    WHERE gameweek = ? AND season = ?
+                """
+                self.conn.execute(delete_query, (gameweek, season))
+                logger.info(f"Deleted existing records for gameweek {gameweek}, season {season}")
+            
+            # Now insert the new data
             data.to_sql(
                 table,
                 self.conn,
@@ -445,19 +653,6 @@ class DataMerger:
             )
             self.conn.commit()
             logger.info(f"Saved {len(data)} records to {table}")
-        except sqlite3.IntegrityError as e:
-            logger.warning(f"Integrity error (likely duplicates): {e}")
-            # Rollback the failed insert
-            self.conn.rollback()
-            # Try updating existing records with new transaction
-            self.conn.execute("BEGIN TRANSACTION")
-            try:
-                self._update_existing_records(data, table)
-                self.conn.commit()
-            except Exception as update_e:
-                logger.error(f"Failed to update records: {update_e}")
-                self.conn.rollback()
-                raise
         except Exception as e:
             logger.error(f"Database error: {e}")
             self.conn.rollback()
@@ -474,6 +669,9 @@ class DataMerger:
         allowed_tables = ['player_gameweek_stats', 'player_info', 'fixtures', 'teams']
         if table not in allowed_tables:
             raise ValueError(f"Invalid table name: {table}. Must be one of: {allowed_tables}")
+        
+        # Clean data before update
+        data = self._clean_dataframe_for_db(data)
             
         for _, row in data.iterrows():
             # Build update query with parameterized columns
@@ -492,6 +690,18 @@ class DataMerger:
                     # Convert Series to scalar if needed
                     if isinstance(val, pd.Series):
                         val = val.iloc[0] if len(val) > 0 else None
+                    # Handle numpy types
+                    elif hasattr(val, 'item'):  # numpy scalar
+                        val = val.item()
+                    # Handle numpy.int64, numpy.float64, etc
+                    elif type(val).__module__ == 'numpy':
+                        val = val.item() if hasattr(val, 'item') else float(val)
+                    # Convert pandas NA to None for SQLite
+                    elif pd.isna(val):
+                        val = None
+                    # Ensure not a complex type
+                    elif not isinstance(val, (str, int, float, bool, type(None))):
+                        val = str(val)  # Convert to string as last resort
                     values.append(val)
             values.extend([row['player_id'], row['gameweek'], row['season']])
             

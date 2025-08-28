@@ -87,9 +87,9 @@ monitoring:
 
 # Season settings
 season:
-  current: "2024-25"
-  start_date: "2024-08-16"
-  end_date: "2025-05-25"
+  current: "2025-26"
+  start_date: "2025-08-15"
+  end_date: "2026-05-25"
   total_gameweeks: 38
 
 # Model settings (for future use)

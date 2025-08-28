@@ -273,7 +273,7 @@ class FPLAPICollector:
         # Select important columns
         important_cols = [
             'id', 'web_name', 'first_name', 'second_name', 'position', 
-            'team_name', 'team_short', 'price', 'price_change',
+            'team', 'team_name', 'team_short', 'price', 'price_change',
             'total_points', 'points_per_game', 'form', 'selected_by_percent',
             'minutes', 'goals_scored', 'assists', 'clean_sheets',
             'goals_conceded', 'own_goals', 'penalties_saved', 'penalties_missed',
