@@ -742,14 +742,15 @@ def search(search_term, team, position, max_price):
 @cli.command()
 @click.option('--player-ids', '-p', help='Comma-separated player IDs (e.g., "1,15,234")')
 @click.option('--player-names', '-n', help='Comma-separated player names (will auto-find IDs)')
-@click.option('--transfers', '-t', default=1, help='Number of free transfers available')
-@click.option('--bank', '-b', default=0.0, help='Money in bank')
+@click.option('--transfers', '-t', type=int, help='Number of free transfers available')
+@click.option('--bank', '-b', type=float, help='Money in bank')
 @click.option('--wildcard', '--wc', is_flag=True, help='Wildcard available')
 @click.option('--free-hit', '--fh', is_flag=True, help='Free Hit available')
 @click.option('--bench-boost', '--bb', is_flag=True, help='Bench Boost available')
 @click.option('--triple-captain', '--tc', is_flag=True, help='Triple Captain available')
 @click.option('--gameweek', '-gw', type=int, help='Gameweek to analyze')
-def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench_boost, triple_captain, gameweek):
+@click.option('--no-interactive', is_flag=True, help='Disable interactive prompts')
+def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench_boost, triple_captain, gameweek, no_interactive):
     """Analyze your team and get personalized recommendations
     
     Examples:
@@ -867,16 +868,61 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
     # Create team object
     from src.my_team import MyTeam, TeamAnalyzer, ChipAdvisor
     
+    # Interactive mode to get user inputs if not provided
+    if not no_interactive:
+        if transfers is None:
+            console.print("\n[bold cyan]📝 Team Configuration[/bold cyan]")
+            console.print("[dim]Press Enter for default values[/dim]\n")
+            
+            # Free transfers
+            transfers_input = console.input("How many free transfers do you have? [default: 1]: ")
+            transfers = int(transfers_input) if transfers_input else 1
+        
+        if bank is None:
+            # Bank balance
+            bank_input = console.input("How much money in the bank (£m)? [default: 0.0]: ")
+            bank = float(bank_input) if bank_input else 0.0
+            
+        if not any([wildcard, free_hit, bench_boost, triple_captain]):
+            # Power-ups/Chips
+            console.print("\n[bold cyan]Available Power-ups/Chips:[/bold cyan]")
+            wc_input = console.input("Do you have Wildcard available? (y/n) [default: y]: ")
+            wildcard = wc_input.lower() != 'n' if wc_input else True
+            
+            fh_input = console.input("Do you have Free Hit available? (y/n) [default: y]: ")
+            free_hit = fh_input.lower() != 'n' if fh_input else True
+            
+            bb_input = console.input("Do you have Bench Boost available? (y/n) [default: y]: ")
+            bench_boost = bb_input.lower() != 'n' if bb_input else True
+            
+            tc_input = console.input("Do you have Triple Captain available? (y/n) [default: y]: ")
+            triple_captain = tc_input.lower() != 'n' if tc_input else True
+            console.print()
+    
+    # Set defaults if still not provided
+    if transfers is None:
+        transfers = 1
+    if bank is None:
+        bank = 0.0
+    if wildcard is None:
+        wildcard = True
+    if free_hit is None:
+        free_hit = True
+    if bench_boost is None:
+        bench_boost = True
+    if triple_captain is None:
+        triple_captain = True
+    
     my_team = MyTeam(
         players=team_ids[:15],  # Ensure max 15
         captain=team_ids[0] if team_ids else 0,  # Default first player as captain
         vice_captain=team_ids[1] if len(team_ids) > 1 else 0,
         bank=bank,
         free_transfers=transfers,
-        wildcard_available=not wildcard,  # Flag means "used", so invert
-        free_hit_available=not free_hit,
-        bench_boost_available=not bench_boost,
-        triple_captain_available=not triple_captain
+        wildcard_available=wildcard,  # Fixed: Don't invert
+        free_hit_available=free_hit,
+        bench_boost_available=bench_boost,
+        triple_captain_available=triple_captain
     )
     
     # Analyze team
@@ -1041,16 +1087,22 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
         elif advice.get('use') == 'consider':
             chips_to_consider.append((chip_name, advice))
     
-    if chips_to_use or chips_to_consider:
-        console.print("\n[bold magenta]🎯 Chip/Power-up Recommendations:[/bold magenta]")
-        
-        # Show available chips
-        available_chips = []
-        if my_team.wildcard_available: available_chips.append("Wildcard")
-        if my_team.free_hit_available: available_chips.append("Free Hit")
-        if my_team.bench_boost_available: available_chips.append("Bench Boost")
-        if my_team.triple_captain_available: available_chips.append("Triple Captain")
+    # ALWAYS show chip recommendations section
+    console.print("\n[bold magenta]🎯 Power-up/Chip Recommendations:[/bold magenta]")
+    
+    # Show available chips
+    available_chips = []
+    if my_team.wildcard_available: available_chips.append("Wildcard")
+    if my_team.free_hit_available: available_chips.append("Free Hit")
+    if my_team.bench_boost_available: available_chips.append("Bench Boost")
+    if my_team.triple_captain_available: available_chips.append("Triple Captain")
+    
+    if available_chips:
         console.print(f"[dim]Available: {', '.join(available_chips)}[/dim]")
+    else:
+        console.print("[dim]No chips available[/dim]")
+    
+    if chips_to_use or chips_to_consider:
         
         # Urgent chip recommendations
         if chips_to_use:
@@ -1081,6 +1133,14 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
                 console.print(f"\n[yellow]{chip_emoji} Consider {chip_display}[/yellow]")
                 for reason in advice.get('reasons', []):
                     console.print(f"  • {reason}")
+    else:
+        # No chips to use or consider - give hold recommendation
+        console.print("\n[green]✅ Recommendation: HOLD all chips for now[/green]")
+        console.print("[dim]Save your power-ups for:[/dim]")
+        console.print("  • Double gameweeks (players play twice)")
+        console.print("  • Blank gameweeks (use Free Hit)")
+        console.print("  • Easy fixture runs for premium captains (Triple Captain)")
+        console.print("  • When bench has favorable fixtures (Bench Boost)")
     
     merger.close()
 
