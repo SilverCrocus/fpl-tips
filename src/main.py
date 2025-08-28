@@ -960,6 +960,9 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
             elif w['type'] == 'hard_fixtures':
                 console.print(f"• {w['player']} - Difficult fixtures ({w['difficulty']:.1f})")
     
+    # Get team players data first (needed for conflict detection)
+    team_data = data[data['player_id'].isin(my_team.players)]
+    
     # Get transfer recommendations - use actual number of free transfers
     recommendations = analyzer.get_transfer_recommendations(my_team, num_transfers=transfers+2)
     
@@ -998,8 +1001,6 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
                 console.print("[dim]Priority: Optional[/dim]")
     
     # Current lineup suggestion
-    # Get team players data
-    team_data = data[data['player_id'].isin(my_team.players)]
     lineup = analyzer.get_lineup_suggestion(team_data)
     if lineup and lineup.get('starting_11'):
         console.print("\n[bold green]⚽ Current Best Lineup:[/bold green]")
