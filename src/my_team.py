@@ -43,6 +43,7 @@ class TeamAnalyzer:
     def __init__(self, scorer, data: pd.DataFrame):
         self.scorer = scorer
         self.data = data
+        self.fixture_conflicts = []  # Track fixture conflicts
         
     def analyze_team(self, my_team: MyTeam) -> Dict:
         """Comprehensive team analysis
@@ -324,6 +325,64 @@ class TeamAnalyzer:
             'recommended_captain': captain_scores[0] if captain_scores else None,
             'top_3_options': captain_scores[:3]
         }
+    
+    def detect_fixture_conflicts(self, team_data: pd.DataFrame, transfers: List[TransferRecommendation] = None) -> List[Dict]:
+        """Detect when players in team or transfers face each other
+        
+        Args:
+            team_data: Current team DataFrame  
+            transfers: List of transfer recommendations to check
+            
+        Returns:
+            List of fixture conflicts
+        """
+        conflicts = []
+        
+        # Get teams in current squad
+        team_players = {}
+        if 'team_name' in team_data.columns:
+            for _, player in team_data.iterrows():
+                team = player.get('team_name', 'Unknown')
+                if team not in team_players:
+                    team_players[team] = []
+                team_players[team].append(player.get('player_name', 'Unknown'))
+        
+        # Add transfer players
+        if transfers:
+            for transfer in transfers:
+                # Player coming in
+                in_team = transfer.player_in.get('team_name', 'Unknown')
+                if in_team not in team_players:
+                    team_players[in_team] = []
+                team_players[in_team].append(transfer.player_in.get('web_name', 'Unknown'))
+        
+        # Check for opposing fixtures (simplified check based on fixture difficulty)
+        # In a full implementation, we'd check actual fixtures
+        all_teams = list(team_players.keys())
+        
+        for i, team1 in enumerate(all_teams):
+            for team2 in all_teams[i+1:]:
+                # Get average fixture difficulties
+                team1_players_df = team_data[team_data['team_name'] == team1] if 'team_name' in team_data.columns else pd.DataFrame()
+                team2_players_df = team_data[team_data['team_name'] == team2] if 'team_name' in team_data.columns else pd.DataFrame()
+                
+                if not team1_players_df.empty and not team2_players_df.empty:
+                    team1_diff = team1_players_df['fixture_difficulty'].mean() if 'fixture_difficulty' in team1_players_df.columns else 3
+                    team2_diff = team2_players_df['fixture_difficulty'].mean() if 'fixture_difficulty' in team2_players_df.columns else 3
+                    
+                    # If one team has easy fixtures (<=2) and other has hard (>=4), they might be playing each other
+                    if (team1_diff <= 2 and team2_diff >= 4) or (team1_diff >= 4 and team2_diff <= 2):
+                        conflicts.append({
+                            'team1': team1,
+                            'team1_players': team_players[team1],
+                            'team2': team2, 
+                            'team2_players': team_players[team2],
+                            'type': 'opposing_fixture',
+                            'severity': 'warning',
+                            'message': f"⚠️ Players from {team1} and {team2} may face each other - one's success hurts the other's points!"
+                        })
+        
+        return conflicts
         
     def get_transfer_recommendations(self, my_team: MyTeam, 
                                     num_transfers: int = 2) -> List[TransferRecommendation]:

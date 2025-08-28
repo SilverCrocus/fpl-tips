@@ -963,6 +963,18 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
     # Get transfer recommendations - use actual number of free transfers
     recommendations = analyzer.get_transfer_recommendations(my_team, num_transfers=transfers+2)
     
+    # Check for fixture conflicts
+    if recommendations:
+        conflicts = analyzer.detect_fixture_conflicts(team_data, recommendations[:my_team.free_transfers])
+        
+        if conflicts:
+            console.print("\n[bold red]⚠️ Fixture Conflict Warning:[/bold red]")
+            for conflict in conflicts:
+                console.print(f"[yellow]{conflict['message']}[/yellow]")
+                console.print(f"  • {conflict['team1']}: {', '.join(conflict['team1_players'][:2])}")
+                console.print(f"  • {conflict['team2']}: {', '.join(conflict['team2_players'][:2])}")
+            console.print("[dim]Tip: Having attackers vs defenders from opposing teams means one's success hurts the other's clean sheet points![/dim]")
+    
     if recommendations:
         console.print("\n[bold green]📈 Transfer Recommendations:[/bold green]")
         
