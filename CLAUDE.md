@@ -1,0 +1,1 @@
+- I use uv for my project so remember to run file i just do uv run filename. and also no need to pip install just do uv add

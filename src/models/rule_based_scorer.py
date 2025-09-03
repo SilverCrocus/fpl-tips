@@ -73,11 +73,12 @@ class ScoringWeights:
             mid_weights={
                 'prob_goal': 3.0,
                 'prob_assist': 2.0,
-                'expected_goals': 2.5,
-                'expected_assists': 2.0,
+                'expected_goals': 1.2,  # Reduced from 2.5 - less emphasis on xG
+                'expected_assists': 1.5,  # Reduced from 2.0
                 'creativity': 0.02,
                 'threat': 0.02,
-                'form': 0.5,
+                'form': 1.5,  # Increased from 0.5 - emphasize actual performance
+                'gameweek_points': 1.0,  # NEW: Recent actual returns
                 'fixture_difficulty': -0.2,
                 'fixture_diff_next2': -0.3,
                 'fixture_diff_next5': -0.2,
@@ -87,10 +88,11 @@ class ScoringWeights:
             },
             fwd_weights={
                 'prob_goal': 3.5,
-                'expected_goals': 3.0,
+                'expected_goals': 1.5,  # Reduced from 3.0 - less emphasis on xG
                 'prob_assist': 1.5,
                 'threat': 0.03,
-                'form': 0.6,
+                'form': 1.8,  # Increased from 0.6 - emphasize actual performance
+                'gameweek_points': 1.2,  # NEW: Recent actual returns (higher for forwards)
                 'fixture_difficulty': -0.2,
                 'fixture_diff_next2': -0.3,
                 'fixture_diff_next5': -0.1,
@@ -113,6 +115,46 @@ class RuleBasedScorer:
         """
         self.weights = weights or ScoringWeights.default()
         
+    def calculate_blank_percentage(self, player: pd.Series) -> float:
+        """Calculate blank percentage from recent gameweeks
+        
+        A blank is defined as 3 points or fewer in a gameweek
+        
+        Args:
+            player: Player data with recent gameweek info
+            
+        Returns:
+            Percentage of blanks (0-1)
+        """
+        # Look for recent gameweek columns (e.g., gw1_points, gw2_points, etc.)
+        recent_points = []
+        
+        # Try to get last 3-5 gameweeks of data
+        for i in range(1, 6):
+            gw_col = f'gw{i}_points'
+            if gw_col in player.index and pd.notna(player[gw_col]):
+                recent_points.append(player[gw_col])
+        
+        # If no detailed gameweek data, estimate from form
+        if not recent_points:
+            # Form is average points per game over last 30 days
+            # If form is low, assume high blank percentage
+            form = player.get('form', 0)
+            if form <= 3.0:
+                return 0.75  # 75% blank rate for very low form
+            elif form <= 4.5:
+                return 0.50  # 50% blank rate for low form
+            elif form <= 6.0:
+                return 0.25  # 25% blank rate for decent form
+            else:
+                return 0.10  # 10% blank rate for high form
+        
+        # Calculate actual blank percentage
+        blanks = sum(1 for pts in recent_points if pts <= 3)
+        total_games = len(recent_points)
+        
+        return blanks / total_games if total_games > 0 else 0
+    
     def score_player(self, player: pd.Series) -> float:
         """Score a single player
         
@@ -143,6 +185,11 @@ class RuleBasedScorer:
             if pd.notna(value):
                 score += weight * float(value)
                 
+        # Apply consistency penalty (penalize volatile performers)
+        blank_percentage = self.calculate_blank_percentage(player)
+        consistency_penalty = -1.5  # Negative weight for blanks
+        score += consistency_penalty * blank_percentage
+        
         # Apply availability penalty
         if player.get('chance_of_playing_next_round', 100) < 75:
             score *= (player.get('chance_of_playing_next_round', 0) / 100)

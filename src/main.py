@@ -982,11 +982,21 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
     if recommendations:
         console.print("\n[bold green]📈 Transfer Recommendations:[/bold green]")
         
+        # Track running budget for affordability check
+        running_bank = bank
+        
         for i, rec in enumerate(recommendations, 1):
             if i <= transfers:
                 console.print(f"\n[green]Transfer {i} (FREE):[/green]")
             else:
                 console.print(f"\n[yellow]Transfer {i} (-4 pts):[/yellow]")
+            
+            # Check affordability
+            if rec.net_cost > running_bank:
+                console.print(f"[bold red]⚠️ WARNING: This transfer is NOT affordable![/bold red]")
+                console.print(f"[red]Required: £{rec.net_cost:.1f}m | Available: £{running_bank:.1f}m[/red]")
+                console.print("[red]Skipping this transfer...[/red]\n")
+                continue
             
             console.print(f"OUT: {rec.player_out['name']} (£{rec.player_out['price']:.1f}m)")
             console.print(f"IN:  {rec.player_in['name']} (£{rec.player_in['price']:.1f}m)")
@@ -994,12 +1004,46 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
             console.print(f"Score improvement: {rec.score_improvement:+.1f}")
             console.print(f"Reason: {rec.reason}")
             
+            # Update running bank
+            running_bank -= rec.net_cost
+            
             if rec.priority == 1:
                 console.print("[red]Priority: URGENT[/red]")
             elif rec.priority == 2:
                 console.print("[yellow]Priority: Recommended[/yellow]")
             else:
                 console.print("[dim]Priority: Optional[/dim]")
+            
+            # Show strategic hit evaluation for transfers beyond free
+            if i > transfers and hasattr(rec, 'hit_evaluation') and rec.hit_evaluation:
+                eval_result = rec.hit_evaluation
+                
+                # Color-code based on recommendation
+                if eval_result['recommendation'] == 'AVOID':
+                    color = "red"
+                    emoji = "🚫"
+                elif eval_result['recommendation'] == 'CONSIDER':
+                    color = "yellow" 
+                    emoji = "🤔"
+                else:  # TAKE
+                    color = "green"
+                    emoji = "✅"
+                
+                console.print(f"\n[{color}]Hit Evaluation: {emoji} {eval_result['recommendation']} (Confidence: {eval_result['confidence']})[/{color}]")
+                console.print(f"[dim]Expected gain: {eval_result.get('adjusted_gain', eval_result.get('point_gain', 0)):.1f} pts[/dim]")
+                console.print(f"[dim]{eval_result['strategic_advice']}[/dim]")
+                
+                # Show key modifiers if present
+                if eval_result.get('modifiers'):
+                    mods = eval_result['modifiers']
+                    if mods.get('is_fire'):
+                        console.print("[red]  • 🔥 Replacing injured/suspended player[/red]")
+                    if mods.get('is_captain_candidate'):
+                        console.print("[cyan]  • 👑 Captain candidate[/cyan]")
+                    if mods.get('is_dgw_player'):
+                        console.print("[green]  • 🎯 Double Gameweek player[/green]")
+                    if mods.get('has_fixture_swing'):
+                        console.print(f"[green]  • 📈 Favorable fixture swing[/green]")
     
     # Current lineup suggestion
     lineup = analyzer.get_lineup_suggestion(team_data)
@@ -1111,6 +1155,9 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
     chips_to_consider = []
     
     for chip_name, advice in all_chip_advice.items():
+        # Skip non-chip entries like 'strategic_summary'
+        if chip_name == 'strategic_summary' or not isinstance(advice, dict):
+            continue
         if advice.get('use') == True:
             chips_to_use.append((chip_name, advice))
         elif advice.get('use') == 'consider':
@@ -1145,8 +1192,24 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
                 
                 chip_display = chip_name.replace('_', ' ').title()
                 console.print(f"\n[bold red]{chip_emoji} USE {chip_display.upper()} THIS WEEK[/bold red]")
+                
+                # Special display for triple captain - show the player
+                if chip_name == 'triple_captain' and advice.get('player'):
+                    console.print(f"  [bold cyan]→ Captain: {advice['player']}[/bold cyan]")
+                    if advice.get('expected_points'):
+                        console.print(f"  [cyan]→ Expected points: {advice['expected_points']:.1f}[/cyan]")
+                
+                # Special display for bench boost - show expected bench points
+                elif chip_name == 'bench_boost' and advice.get('expected_bench_points'):
+                    console.print(f"  [cyan]→ Expected bench points: {advice['expected_bench_points']:.1f}[/cyan]")
+                
+                # Display reasons
                 for reason in advice.get('reasons', []):
                     console.print(f"  • {reason}")
+                
+                # Display strategic advice if available
+                if advice.get('strategic_advice'):
+                    console.print(f"  [bold yellow]{advice['strategic_advice']}[/bold yellow]")
         
         # Consider using chips
         if chips_to_consider:
@@ -1160,16 +1223,38 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
                 
                 chip_display = chip_name.replace('_', ' ').title()
                 console.print(f"\n[yellow]{chip_emoji} Consider {chip_display}[/yellow]")
+                
+                # Special display for triple captain - show the player
+                if chip_name == 'triple_captain' and advice.get('player'):
+                    console.print(f"  [cyan]→ Captain: {advice['player']}[/cyan]")
+                    if advice.get('expected_points'):
+                        console.print(f"  [dim]→ Expected points: {advice['expected_points']:.1f}[/dim]")
+                
+                # Special display for bench boost - show expected bench points
+                elif chip_name == 'bench_boost' and advice.get('expected_bench_points'):
+                    console.print(f"  [dim]→ Expected bench points: {advice['expected_bench_points']:.1f}[/dim]")
+                
+                # Display reasons
                 for reason in advice.get('reasons', []):
                     console.print(f"  • {reason}")
+                
+                # Display strategic advice if available
+                if advice.get('strategic_advice'):
+                    console.print(f"  [bold yellow]{advice['strategic_advice']}[/bold yellow]")
     else:
-        # No chips to use or consider - give hold recommendation
-        console.print("\n[green]✅ Recommendation: HOLD all chips for now[/green]")
-        console.print("[dim]Save your power-ups for:[/dim]")
-        console.print("  • Double gameweeks (players play twice)")
-        console.print("  • Blank gameweeks (use Free Hit)")
-        console.print("  • Easy fixture runs for premium captains (Triple Captain)")
-        console.print("  • When bench has favorable fixtures (Bench Boost)")
+        # Check for strategic summary
+        strategic_summary = all_chip_advice.get('strategic_summary')
+        if strategic_summary:
+            console.print(f"\n[bold cyan]{strategic_summary}[/bold cyan]")
+        else:
+            # No chips to use or consider - give hold recommendation
+            console.print("\n[green]✅ Recommendation: HOLD all chips for now[/green]")
+        
+        console.print("\n[dim]💡 Strategic chip timing tips:[/dim]")
+        console.print("  • [bold]Triple Captain[/bold]: SAVE for Double Gameweek with premium captain")
+        console.print("  • [bold]Bench Boost[/bold]: SAVE for Double Gameweek after Wildcard")
+        console.print("  • [bold]Free Hit[/bold]: SAVE for Blank Gameweek (<8 players)")
+        console.print("  • [bold]Wildcard[/bold]: Use when 4+ issues or to prepare for DGW/BGW")
     
     merger.close()
 

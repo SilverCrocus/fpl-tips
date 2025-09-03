@@ -15,6 +15,7 @@ import os
 from src.data.data_merger import DataMerger
 from src.models.rule_based_scorer import RuleBasedScorer
 from src.my_team import TeamAnalyzer, MyTeam
+from src.team_optimizer import TeamOptimizer
 
 # Page config
 st.set_page_config(
@@ -428,6 +429,57 @@ def main():
         
         # Action buttons
         st.markdown("### 🎮 Actions")
+        
+        # Team Recommendation Section
+        st.markdown("### 🤖 AI Team Recommendation")
+        
+        # Strategy selector
+        optimizer = TeamOptimizer()
+        strategies = optimizer.get_strategies()
+        strategy_descriptions = {
+            'balanced': 'Balanced - Best for next 3 gameweeks',
+            'short_term': 'Short-term - Focus on next gameweek',
+            'long_term': 'Long-term - Plan for next 5 gameweeks',
+            'differential': 'Differential - Low ownership gems',
+            'template': 'Template - Follow the crowd'
+        }
+        
+        selected_strategy = st.selectbox(
+            "Select Strategy",
+            strategies,
+            format_func=lambda x: strategy_descriptions[x]
+        )
+        
+        if st.button("🎯 Get Fresh Team Recommendation", use_container_width=True):
+            with st.spinner("Optimizing team selection..."):
+                try:
+                    # Get recommendation
+                    result = optimizer.recommend_team(strategy=selected_strategy)
+                    
+                    if 'error' in result:
+                        st.error(result['error'])
+                    else:
+                        # Clear current team
+                        st.session_state.team = {'GKP': [], 'DEF': [], 'MID': [], 'FWD': []}
+                        
+                        # Add recommended players
+                        for position in ['GKP', 'DEF', 'MID', 'FWD']:
+                            for player in result['team'][position]:
+                                st.session_state.team[position].append(player['player_id'])
+                        
+                        # Show success message with details
+                        st.success(f"✅ Team recommended using '{selected_strategy}' strategy!")
+                        st.info(f"💰 Total Cost: £{result['total_cost']:.1f}m")
+                        st.info(f"📊 Expected Points: {result['expected_points']:.1f}")
+                        if result['captain']:
+                            st.info(f"©️ Captain: {result['captain']['player_name']}")
+                        
+                        st.rerun()
+                        
+                except Exception as e:
+                    st.error(f"Error generating recommendation: {str(e)}")
+        
+        st.markdown("---")
         
         if st.button("🔄 Reset Team", use_container_width=True):
             st.session_state.team = {'GKP': [], 'DEF': [], 'MID': [], 'FWD': []}
