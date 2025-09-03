@@ -38,16 +38,63 @@ cp .env.example .env
 
 Your Odds API key is already configured: `18405dde82249ca0a31950d7819767c7`
 
-## Usage with uv 🎮
+## Usage 🎮
 
-With `uv`, you can run files directly:
+### 🖥️ GUI Application (NEW!) - Interactive Web Interface
 
-### 1. Check System Status
+Launch the **graphical user interface** with clickable elements, dropdowns, and visual team display:
+
+#### Standard Version:
+```bash
+python run_gui.py
+# Or directly: streamlit run app.py
+```
+
+#### Advanced Version (with analysis features):
+```bash
+python run_gui.py --advanced
+# Or directly: streamlit run app_advanced.py
+```
+
+**GUI Features:**
+- 🖱️ **Click & Select**: Dropdown menus for player selection
+- 📊 **Visual Team Display**: See your team on an interactive pitch
+- 🔍 **Smart Filters**: Filter by team, price, points, form
+- 💰 **Live Budget Tracking**: Real-time budget updates
+- ✅ **Auto Validation**: Instant feedback on team rules
+- 📈 **Team Analysis**: Stats, charts, and recommendations
+- 💾 **Save/Load Teams**: Store multiple team configurations
+- ©️ **Captain Selection**: Visual captain/vice-captain picker
+- 🔄 **Transfer Suggestions**: AI-powered recommendations
+
+The GUI will automatically open in your browser at `http://localhost:8501`
+
+### 🖥️ Command Line Interface
+
+For those who prefer the terminal:
+
+#### Interactive Team Builder
+Build your FPL team with a text-based interface:
+```bash
+uv run fpl.py build-team
+```
+
+Edit an existing team:
+```bash
+uv run fpl.py build-team -l '1,15,234,567...'  # Load from player IDs
+```
+
+Load a saved team:
+```bash
+uv run fpl.py load-team my_team  # Load saved team and show options
+```
+
+### 2. Check System Status
 ```bash
 uv run fpl.py status
 ```
 
-### 2. Fetch Latest Data
+### 3. Fetch Latest Data
 ```bash
 # Fetch current gameweek data with real odds
 uv run fpl.py fetch-data
@@ -132,9 +179,13 @@ fpltips/
 │   │   ├── rule_based_scorer.py  # Position-specific scoring
 │   │   └── backtester.py         # Historical validation
 │   ├── recommender/          # Transfer & captain logic
+│   ├── team_builder.py       # Interactive team builder
+│   ├── my_team.py           # Team analysis
 │   └── main.py               # CLI interface
 ├── data/                     # SQLite database
 ├── cache/                    # API response caching
+├── teams/                    # Saved team configurations
+├── tests/                    # Test files
 ├── logs/                     # Application logs
 ├── .env                      # Your API keys
 ├── pyproject.toml           # uv project config

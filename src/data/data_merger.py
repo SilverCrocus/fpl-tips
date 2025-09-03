@@ -30,7 +30,7 @@ class DataMerger:
         
     def _initialize_database(self):
         """Initialize SQLite database with tables"""
-        self.conn = sqlite3.connect(self.db_path)
+        self.conn = sqlite3.connect(self.db_path, isolation_level='DEFERRED')
         
         # Create tables
         queries = [
@@ -516,20 +516,62 @@ class DataMerger:
         
         unified = unified.rename(columns=column_mapping)
         
+        # Add missing columns that database expects
+        if 'gameweek_points' not in unified.columns and 'event_points' in unified.columns:
+            unified['gameweek_points'] = unified['event_points']
+        elif 'gameweek_points' not in unified.columns:
+            unified['gameweek_points'] = 0
+            
+        if 'team_short' not in unified.columns:
+            unified['team_short'] = unified['team_name'].str[:3].str.upper() if 'team_name' in unified.columns else ''
+            
+        # Add position flags
+        if 'position' in unified.columns:
+            unified['is_goalkeeper'] = (unified['position'] == 'GK').astype(int)
+            unified['is_defender'] = (unified['position'] == 'DEF').astype(int)
+            unified['is_midfielder'] = (unified['position'] == 'MID').astype(int)
+            unified['is_forward'] = (unified['position'] == 'FWD').astype(int)
+        else:
+            unified['is_goalkeeper'] = 0
+            unified['is_defender'] = 0
+            unified['is_midfielder'] = 0
+            unified['is_forward'] = 0
+            
+        # Add expected_goals_conceded if missing
+        if 'expected_goals_conceded' not in unified.columns:
+            unified['expected_goals_conceded'] = 0.0
+            
+        # Add elo_diff
+        if 'team_elo' in unified.columns and 'opponent_elo' in unified.columns:
+            unified['elo_diff'] = unified['team_elo'] - unified['opponent_elo']
+        else:
+            unified['elo_diff'] = 0.0
+            
+        # Add odds columns if missing
+        if 'odds_assist' not in unified.columns:
+            unified['odds_assist'] = np.nan
+        if 'prob_assist' not in unified.columns:
+            unified['prob_assist'] = np.nan
+        if 'odds_clean_sheet' not in unified.columns:
+            unified['odds_clean_sheet'] = np.nan
+        if 'prob_clean_sheet' not in unified.columns:
+            unified['prob_clean_sheet'] = np.nan
+        
         # Select final columns
         final_columns = [
             'player_id', 'gameweek', 'season', 'player_name', 'position',
-            'team', 'team_name', 'price', 'price_change', 'total_points', 'gameweek_points',
+            'team', 'team_name', 'team_short', 'price', 'price_change', 'total_points', 'gameweek_points',
             'minutes', 'goals_scored', 'assists', 'clean_sheets', 'goals_conceded',
             'saves', 'bonus', 'bps', 'influence', 'creativity', 'threat', 'ict_index',
-            'expected_goals', 'expected_assists', 'expected_goal_involvements',
+            'expected_goals', 'expected_assists', 'expected_goal_involvements', 'expected_goals_conceded',
             'form', 'selected_by_percent', 'transfers_in', 'transfers_out',
-            'odds_goal', 'odds_assist', 'prob_goal', 'prob_assist',
-            'team_elo', 'opponent_elo', 'fixture_difficulty', 'fixture_diff_next2',
+            'odds_goal', 'odds_assist', 'odds_clean_sheet', 'prob_goal', 'prob_assist', 'prob_clean_sheet',
+            'team_elo', 'opponent_elo', 'elo_diff', 'fixture_difficulty', 'fixture_diff_next2',
             'fixture_diff_next5', 'easy_fixtures_next5', 'hard_fixtures_next5',
             'value_ratio', 'points_per_million', 'recent_form_5', 'ownership_delta',
             'goal_involvement', 'ict_per_90', 'goals_vs_xg', 'assists_vs_xa',
-            'is_available', 'data_quality', 'has_odds_data', 'has_elo_data', 'is_home'
+            'is_available', 'is_goalkeeper', 'is_defender', 'is_midfielder', 'is_forward',
+            'data_quality', 'has_odds_data', 'has_elo_data', 'is_home'
         ]
         
         # Keep only available columns
@@ -594,10 +636,6 @@ class DataMerger:
             logger.warning("Missing gameweek or season columns, cannot save to database")
             return
             
-        # Check for problematic columns with Series values
-        logger.info(f"Data columns before cleaning: {data.columns.tolist()}")
-        logger.info(f"Data shape: {data.shape}")
-        
         # Check for duplicate column names
         if data.columns.duplicated().any():
             logger.warning(f"Duplicate columns found: {data.columns[data.columns.duplicated()].tolist()}")
@@ -605,57 +643,95 @@ class DataMerger:
             data = data.loc[:, ~data.columns.duplicated(keep='first')]
             logger.info(f"Data shape after removing duplicate columns: {data.shape}")
         
-        # Debug which columns have issues
-        for col in data.columns:
-            first_val = data[col].iloc[0] if len(data) > 0 else None
-            if isinstance(first_val, pd.Series):
-                logger.warning(f"Column '{col}' contains Series objects - converting to scalar")
-                # Fix the column by extracting scalar values
-                data[col] = data[col].apply(lambda x: x.iloc[0] if isinstance(x, pd.Series) else x)
-        
         # Remove any duplicate player_id records (keep first)
-        # But ONLY if there are actual duplicates, not if all records have the same Series value
         if 'player_id' in data.columns:
             before_count = len(data)
-            # First ensure player_id values are scalar, not Series
-            if data['player_id'].apply(lambda x: isinstance(x, pd.Series)).any():
-                logger.warning("player_id still contains Series, extracting values...")
-                data['player_id'] = data['player_id'].apply(lambda x: x.iloc[0] if isinstance(x, pd.Series) else x)
-            
-            # Now check for real duplicates based on actual player_id values
             data = data.drop_duplicates(subset=['player_id', 'gameweek', 'season'], keep='first')
             if before_count != len(data):
                 logger.warning(f"Removed {before_count - len(data)} duplicate player records")
-            logger.info(f"Final data shape after deduplication: {data.shape}")
+            logger.info(f"Saving {len(data)} unique records to database")
             
-        # Start transaction
-        self.conn.execute("BEGIN TRANSACTION")
-        
         try:
+            # Ensure no pending transactions
+            try:
+                self.conn.commit()
+            except:
+                pass
+                
             # Delete existing records for this gameweek/season to avoid duplicates
             if 'player_id' in data.columns and not data.empty:
                 gameweek = data['gameweek'].iloc[0]
                 season = data['season'].iloc[0]
                 
+                # Ensure gameweek is an integer for proper comparison
+                if isinstance(gameweek, (np.integer, np.floating)):
+                    gameweek = int(gameweek)
+                elif isinstance(gameweek, str) and gameweek.isdigit():
+                    gameweek = int(gameweek)
+                
+                # Use a cursor for operations
+                cursor = self.conn.cursor()
+                
+                # Check how many records exist for this gameweek/season
+                count_query = f"SELECT COUNT(*) FROM {table} WHERE gameweek = ? AND season = ?"
+                cursor.execute(count_query, (gameweek, season))
+                existing_count = cursor.fetchone()[0]
+                
+                if existing_count > 0:
+                    logger.debug(f"Found {existing_count} existing records for gameweek={gameweek}, season={season}")
+                
+                # Always try to delete, even if count returns 0
                 delete_query = f"""
                     DELETE FROM {table}
                     WHERE gameweek = ? AND season = ?
                 """
-                self.conn.execute(delete_query, (gameweek, season))
-                logger.info(f"Deleted existing records for gameweek {gameweek}, season {season}")
-            
-            # Now insert the new data
-            data.to_sql(
-                table,
-                self.conn,
-                if_exists='append',
-                index=False
-            )
-            self.conn.commit()
-            logger.info(f"Saved {len(data)} records to {table}")
+                cursor.execute(delete_query, (gameweek, season))
+                actual_deleted = cursor.rowcount
+                self.conn.commit()
+                
+                if actual_deleted > 0:
+                    logger.info(f"Deleted {actual_deleted} existing records for gameweek {gameweek}, season {season}")
+                else:
+                    logger.info(f"No existing records deleted for gameweek {gameweek}, season {season}")
+                    
+                # Double-check after delete
+                cursor.execute(count_query, (gameweek, season))
+                remaining_count = cursor.fetchone()[0]
+                if remaining_count > 0:
+                    logger.warning(f"WARNING: {remaining_count} records still exist after delete!")
+                
+                # Get table columns (excluding auto-generated ones)
+                cursor.execute(f"PRAGMA table_info({table})")
+                db_columns = [col[1] for col in cursor.fetchall() if col[1] not in ['id', 'created_at']]
+                
+                # Filter dataframe to only include columns that exist in database
+                insert_data = data[[col for col in db_columns if col in data.columns]].copy()
+                
+                # Replace NaN values with None for SQLite
+                insert_data = insert_data.where(pd.notnull(insert_data), None)
+                
+                # Build insert query
+                placeholders = ','.join(['?' for _ in insert_data.columns])
+                columns = ','.join(insert_data.columns)
+                insert_query = f"INSERT INTO {table} ({columns}) VALUES ({placeholders})"
+                
+                # Insert all records
+                cursor.executemany(insert_query, insert_data.values.tolist())
+                rows_inserted = cursor.rowcount
+                
+                # Commit the insert
+                self.conn.commit()
+                cursor.close()
+                
+                logger.info(f"Saved {rows_inserted} records to {table}")
         except Exception as e:
             logger.error(f"Database error: {e}")
-            self.conn.rollback()
+            logger.error(f"Error type: {type(e).__name__}")
+            # Try to rollback if possible
+            try:
+                self.conn.rollback()
+            except:
+                pass
             raise
             
     def _update_existing_records(self, data: pd.DataFrame, table: str):

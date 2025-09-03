@@ -21,6 +21,9 @@ cache/
 data/*.db
 *.db
 
+# User teams
+teams/
+
 # IDE
 .vscode/
 .idea/

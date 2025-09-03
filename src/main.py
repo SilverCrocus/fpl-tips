@@ -10,6 +10,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 from rich import print as rprint
+from rich.prompt import Prompt, Confirm
 from pathlib import Path
 import logging
 from datetime import datetime
@@ -1080,12 +1081,27 @@ def my_team(player_ids, player_names, transfers, bank, wildcard, free_hit, bench
                     new_tag = " [green]✨ NEW[/green]" if is_new else ""
                     console.print(f"  {i}. {player['name']} ({pos_display}, {player['score']:.1f}){new_tag}")
     
-    # Captain recommendation
+    # Captain recommendation (current team)
     captain_analysis = analysis.get('captain_analysis', {})
     if captain_analysis and captain_analysis.get('top_3_options'):
         console.print("\n[bold cyan]👑 Captain Options:[/bold cyan]")
         for i, opt in enumerate(captain_analysis['top_3_options'], 1):
             console.print(f"{i}. {opt['player']} (score: {opt['score']:.1f})")
+    
+    # Post-transfer captain analysis
+    if recommendations and transfers > 0:
+        free_transfers = recommendations[:transfers]
+        post_captain_analysis = analyzer.get_post_transfer_captain_analysis(
+            team_data, free_transfers, my_team.captain
+        )
+        
+        if post_captain_analysis and post_captain_analysis.get('top_3_options'):
+            console.print("\n[bold cyan]🔄 Post-Transfer Captain Options:[/bold cyan]")
+            for i, opt in enumerate(post_captain_analysis['top_3_options'], 1):
+                # Check if this player is a new transfer
+                is_new = any(t.player_in['name'] == opt['player'] for t in free_transfers)
+                new_indicator = " [green]✨ NEW[/green]" if is_new else ""
+                console.print(f"{i}. {opt['player']} (score: {opt['score']:.1f}){new_indicator}")
     
     # Comprehensive chip advice
     chip_advisor = ChipAdvisor(data)
@@ -1213,6 +1229,171 @@ def status():
     console.print(tips)
     
     merger.close()
+
+
+@cli.command()
+@click.option('--load-ids', '-l', help='Load existing team from comma-separated player IDs')
+@click.option('--budget', '-b', type=float, default=100.0, help='Team budget (default: 100.0)')
+def build_team(load_ids, budget):
+    """Interactive team builder with user-friendly interface
+    
+    Build your FPL team using an intuitive selection interface:
+    • Visual team formation display
+    • Search and filter players
+    • Track budget in real-time
+    • Validate team requirements
+    
+    Examples:
+        # Build new team from scratch
+        python fpl.py build-team
+        
+        # Edit existing team
+        python fpl.py build-team -l '1,15,234,567,890...'
+        
+        # Build with custom budget
+        python fpl.py build-team -b 98.5
+    """
+    from src.team_builder import TeamBuilder, load_existing_team
+    
+    console.print(Panel.fit(
+        "[bold cyan]⚽ Interactive Team Builder[/bold cyan]\n"
+        "[dim]Build your FPL team with an intuitive interface[/dim]",
+        border_style="cyan"
+    ))
+    
+    # Initialize database
+    merger = DataMerger("data/fpl_data.db")
+    
+    # Load player data
+    data = merger.load_from_database()
+    if data.empty:
+        console.print("[red]No data available. Please run 'fetch-data' first.[/red]")
+        merger.close()
+        return
+    
+    # Initialize team builder
+    builder = TeamBuilder(data)
+    builder.team.budget = budget
+    
+    # Load existing team if provided
+    if load_ids:
+        try:
+            team_ids = [int(pid.strip()) for pid in load_ids.split(',')]
+            builder.team = load_existing_team(data, team_ids)
+            console.print(f"[green]Loaded {len(team_ids)} players from existing team[/green]")
+        except ValueError:
+            console.print("[red]Invalid player IDs format[/red]")
+            merger.close()
+            return
+    
+    # Build team interactively
+    team = builder.build_team_interactive()
+    
+    if team:
+        # Display final team
+        console.print("\n" + "=" * 80)
+        console.print("[bold green]✓ Team Built Successfully![/bold green]")
+        console.print("=" * 80)
+        
+        # Show player IDs for use with other commands
+        player_ids_str = ','.join(str(pid) for pid in team.player_ids)
+        console.print(f"\n[bold]Player IDs:[/bold] {player_ids_str}")
+        console.print(f"[bold]Captain:[/bold] Player ID {team.captain}")
+        console.print(f"[bold]Vice-Captain:[/bold] Player ID {team.vice_captain}")
+        
+        # Offer to analyze team
+        console.print("\n[bold]Next steps:[/bold]")
+        console.print(f"• Analyze this team: [cyan]python fpl.py my-team -p '{player_ids_str}'[/cyan]")
+        console.print(f"• Get transfer recommendations: [cyan]python fpl.py recommend -p '{player_ids_str}'[/cyan]")
+        
+        # Save team to file for easy reuse
+        if Confirm.ask("\nSave team to file for easy access?"):
+            team_data = {
+                'player_ids': team.player_ids,
+                'captain': team.captain,
+                'vice_captain': team.vice_captain,
+                'formation': {
+                    'goalkeepers': [p['player_id'] for p in team.goalkeepers],
+                    'defenders': [p['player_id'] for p in team.defenders],
+                    'midfielders': [p['player_id'] for p in team.midfielders],
+                    'forwards': [p['player_id'] for p in team.forwards]
+                }
+            }
+            
+            import json
+            from pathlib import Path
+            
+            # Create teams directory if it doesn't exist
+            teams_dir = Path("teams")
+            teams_dir.mkdir(exist_ok=True)
+            
+            # Save team
+            team_name = Prompt.ask("Team name", default="my_team")
+            filename = teams_dir / f"{team_name}.json"
+            
+            with open(filename, 'w') as f:
+                json.dump(team_data, f, indent=2)
+            
+            console.print(f"[green]✓ Team saved to {filename}[/green]")
+            console.print(f"Load it later with: [cyan]python fpl.py load-team {team_name}[/cyan]")
+    else:
+        console.print("[yellow]Team building cancelled[/yellow]")
+    
+    merger.close()
+
+
+@cli.command()
+@click.argument('team_name')
+def load_team(team_name):
+    """Load a saved team and display options
+    
+    Args:
+        team_name: Name of saved team file (without .json extension)
+    
+    Example:
+        python fpl.py load-team my_team
+    """
+    import json
+    from pathlib import Path
+    
+    teams_dir = Path("teams")
+    filename = teams_dir / f"{team_name}.json"
+    
+    if not filename.exists():
+        console.print(f"[red]Team file not found: {filename}[/red]")
+        
+        # Show available teams
+        if teams_dir.exists():
+            team_files = list(teams_dir.glob("*.json"))
+            if team_files:
+                console.print("\n[bold]Available teams:[/bold]")
+                for tf in team_files:
+                    console.print(f"  • {tf.stem}")
+        return
+    
+    # Load team data
+    with open(filename, 'r') as f:
+        team_data = json.load(f)
+    
+    player_ids_str = ','.join(str(pid) for pid in team_data['player_ids'])
+    
+    console.print(Panel.fit(f"[bold green]Loaded Team: {team_name}[/bold green]", border_style="green"))
+    console.print(f"\n[bold]Player IDs:[/bold] {player_ids_str}")
+    console.print(f"[bold]Captain:[/bold] Player ID {team_data.get('captain', 'Not set')}")
+    console.print(f"[bold]Vice-Captain:[/bold] Player ID {team_data.get('vice_captain', 'Not set')}")
+    
+    # Show formation
+    if 'formation' in team_data:
+        console.print("\n[bold]Formation:[/bold]")
+        console.print(f"  GK: {len(team_data['formation']['goalkeepers'])} players")
+        console.print(f"  DEF: {len(team_data['formation']['defenders'])} players")
+        console.print(f"  MID: {len(team_data['formation']['midfielders'])} players")
+        console.print(f"  FWD: {len(team_data['formation']['forwards'])} players")
+    
+    console.print("\n[bold]Commands to use with this team:[/bold]")
+    console.print(f"• Edit team: [cyan]python fpl.py build-team -l '{player_ids_str}'[/cyan]")
+    console.print(f"• Analyze team: [cyan]python fpl.py my-team -p '{player_ids_str}'[/cyan]")
+    console.print(f"• Get recommendations: [cyan]python fpl.py recommend -p '{player_ids_str}'[/cyan]")
 
 
 def main():

@@ -296,13 +296,19 @@ class TeamAnalyzer:
                 continue
                 
             score = 0
-            # Use .get() with default 0 to avoid NaN issues
-            score += player.get('prob_goal', 0) * 5
-            score += player.get('form', 0) * 0.5
+            # Properly handle NaN values
+            prob_goal = player.get('prob_goal', 0)
+            if pd.notna(prob_goal):
+                score += prob_goal * 5
+            
+            form = player.get('form', 0)
+            if pd.notna(form):
+                score += form * 0.5
             
             # Fixture difficulty (lower is better, so invert)
-            if 'fixture_difficulty' in player and pd.notna(player['fixture_difficulty']):
-                score += (5 - player['fixture_difficulty']) * 0.3
+            fixture_diff = player.get('fixture_difficulty')
+            if pd.notna(fixture_diff):
+                score += (5 - fixture_diff) * 0.3
             
             # Skip players with availability issues
             if player.get('chance_of_playing_next_round', 100) < 75:
@@ -325,6 +331,51 @@ class TeamAnalyzer:
             'recommended_captain': captain_scores[0] if captain_scores else None,
             'top_3_options': captain_scores[:3]
         }
+    
+    def get_post_transfer_captain_analysis(self, team_data: pd.DataFrame, 
+                                          transfers: List[TransferRecommendation], 
+                                          current_captain_id: int) -> Dict:
+        """Analyze captain options for post-transfer team
+        
+        Args:
+            team_data: Current team data
+            transfers: List of transfer recommendations to apply
+            current_captain_id: Current captain player ID
+            
+        Returns:
+            Dictionary with captain analysis for post-transfer team
+        """
+        # Create new team data by applying transfers
+        new_team_data = team_data.copy()
+        
+        # Apply each transfer
+        for transfer in transfers:
+            # Remove transferred out player
+            new_team_data = new_team_data[new_team_data['player_id'] != transfer.player_out['id']]
+            
+            # Add transferred in player
+            new_player_data = self.data[self.data['player_id'] == transfer.player_in['id']]
+            if not new_player_data.empty:
+                new_team_data = pd.concat([new_team_data, new_player_data], ignore_index=True)
+        
+        # Check if current captain is still in the team
+        captain_in_new_team = current_captain_id in new_team_data['player_id'].values
+        
+        # If captain was transferred out, use the best non-GK player as new captain
+        if not captain_in_new_team:
+            non_gk_data = new_team_data[new_team_data['position'] != 'GK']
+            if not non_gk_data.empty:
+                # Use model_score to find best player for captaincy
+                best_idx = non_gk_data['model_score'].idxmax()
+                current_captain_id = non_gk_data.loc[best_idx, 'player_id']
+        
+        # Get captain data
+        captain = new_team_data[new_team_data['player_id'] == current_captain_id]
+        if captain.empty:
+            return {'error': 'Could not find captain in post-transfer team'}
+        
+        # Use the fixed _analyze_captain method (pass the captain_id, not the data)
+        return self._analyze_captain(new_team_data, current_captain_id)
     
     def detect_fixture_conflicts(self, team_data: pd.DataFrame, transfers: List[TransferRecommendation] = None) -> List[Dict]:
         """Detect when players in team or transfers face each other
@@ -404,6 +455,9 @@ class TeamAnalyzer:
         team_data = all_scores[all_scores['player_id'].isin(my_team.players)]
         non_team_data = all_scores[~all_scores['player_id'].isin(my_team.players)]
         
+        # Track already recommended players to avoid duplicates
+        recommended_player_ids = set()
+        
         # Prioritize injured/unavailable players first
         unavailable_players = team_data[
             (team_data['is_available'] == 0) if 'is_available' in team_data.columns else False
@@ -423,9 +477,14 @@ class TeamAnalyzer:
             # Find best replacement in same position within budget
             budget = player_out['price'] + my_team.bank
             
-            replacements = non_team_data[
-                (non_team_data['position'] == player_out['position']) &
-                (non_team_data['price'] <= budget)
+            # Exclude already recommended players from search
+            available_replacements = non_team_data[
+                ~non_team_data['player_id'].isin(recommended_player_ids)
+            ]
+            
+            replacements = available_replacements[
+                (available_replacements['position'] == player_out['position']) &
+                (available_replacements['price'] <= budget)
             ]
             
             if replacements.empty:
@@ -433,6 +492,9 @@ class TeamAnalyzer:
                 
             # Get best replacement
             best_replacement = replacements.nlargest(1, 'model_score').iloc[0]
+            
+            # Add to recommended players set
+            recommended_player_ids.add(best_replacement['player_id'])
             
             # Calculate improvement
             score_improvement = best_replacement['model_score'] - player_out['model_score']
