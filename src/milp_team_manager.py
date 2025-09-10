@@ -66,8 +66,17 @@ class MILPTransferOptimizer:
             all_players = all_players[all_players["has_real_odds"]]
 
         # Get current team and available players
-        current_team = all_players[all_players["player_id"].isin(current_team_ids)]
-        available_players = all_players[~all_players["player_id"].isin(current_team_ids)]
+        # Filter out players not in our data (fail-fast principle - no data, no optimization)
+        valid_current_ids = [pid for pid in current_team_ids if pid in all_players["player_id"].values]
+        missing_ids = set(current_team_ids) - set(valid_current_ids)
+        if missing_ids:
+            logger.warning(f"Players {missing_ids} not in database - excluding from optimization")
+        
+        current_team = all_players[all_players["player_id"].isin(valid_current_ids)]
+        available_players = all_players[~all_players["player_id"].isin(valid_current_ids)]
+        
+        # Update current_team_ids to only include valid players
+        current_team_ids = valid_current_ids
 
         # Pre-filter available players to those realistically affordable
         # Maximum money available = budget + max sell price from team

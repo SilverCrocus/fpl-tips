@@ -293,6 +293,7 @@ class FPLAPICollector:
             "price",
             "price_change",
             "total_points",
+            "event_points",
             "points_per_game",
             "form",
             "selected_by_percent",

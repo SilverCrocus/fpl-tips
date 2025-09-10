@@ -495,6 +495,9 @@ class TeamAnalyzer:
             if not new_player_data.empty:
                 new_team_data = pd.concat([new_team_data, new_player_data], ignore_index=True)
 
+        # Score the new team to get model_score
+        new_team_data = self.scorer.score_all_players(new_team_data)
+        
         # Check if current captain is still in the team
         captain_in_new_team = current_captain_id in new_team_data["player_id"].values
 

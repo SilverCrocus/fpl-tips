@@ -70,6 +70,13 @@ class TeamOptimizer:
         if data.empty:
             return pd.DataFrame()
 
+        # Filter out unavailable players (injured/suspended)
+        if "is_available" in data.columns:
+            available_count = len(data)
+            data = data[data["is_available"] == 1]
+            if available_count > len(data):
+                print(f"Filtered out {available_count - len(data)} unavailable players")
+
         # Score players using the existing system
         scored = self.scorer.score_all_players(data)
 

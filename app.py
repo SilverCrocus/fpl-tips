@@ -281,6 +281,13 @@ def main():
         selected_ids = get_team_players()
         position_players = position_players[~position_players['player_id'].isin(selected_ids)]
         
+        # Show availability status
+        if "is_available" in position_players.columns:
+            available_count = position_players["is_available"].sum()
+            unavailable_count = len(position_players) - available_count
+            if unavailable_count > 0:
+                st.warning(f"⚠️ {unavailable_count} players unavailable (injured/suspended)")
+        
         # Don't filter by budget here - let the user see all players and show warnings instead
         
         # Additional filters
@@ -356,12 +363,20 @@ def main():
                 st.warning(f"Already have {position_limits[position]} {position}s")
             else:
                 # Create display options with stats
-                position_players['select_display'] = (
-                    position_players['player_name'] + ' (' + 
-                    position_players['team_name'].str[:3] + ') - £' + 
-                    position_players['price'].astype(str) + 'm - ' +
-                    position_players['total_points'].astype(int).astype(str) + ' pts'
-                )
+                def create_display_name(row):
+                    base_display = (
+                        f"{row['player_name']} ({row['team_name'][:3]}) - "
+                        f"£{row['price']}m - {int(row['total_points'])} pts"
+                    )
+                    # Add injury indicator if unavailable
+                    if "is_available" in row and row["is_available"] == 0:
+                        chance = row.get('chance_of_playing_next_round', 0)
+                        if pd.isna(chance):
+                            chance = 100
+                        return f"🚑 {base_display} ({int(chance)}% chance)"
+                    return base_display
+                
+                position_players['select_display'] = position_players.apply(create_display_name, axis=1)
                 
                 selected_player = st.selectbox(
                     "Choose a player",
@@ -374,6 +389,13 @@ def main():
                 
                 if selected_player:
                     player_info = position_players[position_players['player_id'] == selected_player].iloc[0]
+                    
+                    # Check if player is available
+                    if "is_available" in player_info and player_info["is_available"] == 0:
+                        chance = player_info.get('chance_of_playing_next_round', 0)
+                        if pd.isna(chance):
+                            chance = 100
+                        st.error(f"⚠️ Player unavailable - {int(chance)}% chance of playing")
                     
                     # Display player stats
                     col1, col2 = st.columns(2)

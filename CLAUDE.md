@@ -112,3 +112,4 @@ This is a Fantasy Premier League (FPL) recommendation system that combines:
 Required in `.env`:
 - `ODDS_API_KEY`: The Odds API key for fetching betting data
 - Other optional configurations can override `config.yaml` settings
+- Do not add default values as fallback actually try to fix the error dont have fallback logic or backwards compatibility
