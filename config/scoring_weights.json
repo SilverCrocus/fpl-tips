@@ -1,0 +1,58 @@
+{
+  "GK": {
+    "prob_clean_sheet": 2.0,
+    "saves_per_game": 0.5,
+    "team_elo": 0.001,
+    "fixture_difficulty": -0.3,
+    "fixture_diff_next2": -0.4,
+    "fixture_diff_next5": -0.2,
+    "easy_fixtures_next5": 0.5,
+    "form": 0.3,
+    "value_ratio": 0.2
+  },
+  "DEF": {
+    "prob_clean_sheet": 2.5,
+    "prob_goal": 1.0,
+    "prob_assist": 1.2,
+    "expected_assists": 1.5,
+    "team_elo": 0.001,
+    "fixture_difficulty": -0.3,
+    "fixture_diff_next2": -0.4,
+    "fixture_diff_next5": -0.2,
+    "easy_fixtures_next5": 0.5,
+    "form": 0.4,
+    "threat": 0.01,
+    "value_ratio": 0.3
+  },
+  "MID": {
+    "prob_goal": 3.0,
+    "prob_assist": 2.0,
+    "expected_goals": 1.2,
+    "expected_assists": 1.5,
+    "creativity": 0.02,
+    "threat": 0.02,
+    "form": 1.5,
+    "gameweek_points": 1.0,
+    "fixture_difficulty": -0.2,
+    "fixture_diff_next2": -0.3,
+    "fixture_diff_next5": -0.2,
+    "easy_fixtures_next5": 0.4,
+    "value_ratio": 0.3,
+    "ict_per_90": 0.01
+  },
+  "FWD": {
+    "prob_goal": 3.5,
+    "expected_goals": 1.5,
+    "prob_assist": 1.5,
+    "threat": 0.03,
+    "form": 1.8,
+    "gameweek_points": 1.2,
+    "fixture_difficulty": -0.2,
+    "fixture_diff_next2": -0.3,
+    "fixture_diff_next5": -0.1,
+    "easy_fixtures_next5": 0.3,
+    "value_ratio": 0.2,
+    "goal_involvement": 2.0,
+    "minutes": 0.01
+  }
+}

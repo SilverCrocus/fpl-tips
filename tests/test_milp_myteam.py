@@ -3,8 +3,9 @@
 Test MILP integration in my-team functionality
 """
 import pandas as pd
+import json
 from src.my_team import MyTeam, TeamAnalyzer, ChipAdvisor
-from src.models.rule_based_scorer import RuleBasedScorer
+from src.models.rule_based_scorer import RuleBasedScorer, ScoringWeights
 from src.data.data_merger import DataMerger
 
 def test_milp_integration():
@@ -20,14 +21,18 @@ def test_milp_integration():
         merger.close()
         return
     
-    # Create scorer
-    scorer = RuleBasedScorer()
+    # Create scorer with weights
+    weights_file = 'config/scoring_weights.json'
+    with open(weights_file, 'r') as f:
+        weights_data = json.load(f)
+    weights = ScoringWeights.from_dict(weights_data)
+    scorer = RuleBasedScorer(weights)
     
     # Create a sample team (top players by position)
     sample_team_ids = []
     
     # Get 2 GKs
-    gks = data[data['position'].isin(['GK', 'GKP'])].nlargest(2, 'total_points')
+    gks = data[data['position'] == 'GK'].nlargest(2, 'total_points')
     sample_team_ids.extend(gks['player_id'].tolist()[:2])
     
     # Get 5 DEFs

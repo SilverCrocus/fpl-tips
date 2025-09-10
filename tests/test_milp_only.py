@@ -44,7 +44,7 @@ def test_milp_only():
             
             # Count players by position
             team = result.get('team', {})
-            for pos in ['GKP', 'DEF', 'MID', 'FWD']:
+            for pos in ['GK', 'DEF', 'MID', 'FWD']:
                 count = len(team.get(pos, []))
                 print(f"   {pos}: {count} players")
     

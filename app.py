@@ -75,7 +75,7 @@ st.markdown("""
 # Initialize session state
 if 'team' not in st.session_state:
     st.session_state.team = {
-        'GKP': [],
+        'GK': [],
         'DEF': [],
         'MID': [],
         'FWD': []
@@ -110,7 +110,7 @@ def load_data():
 def get_team_players():
     """Get all players currently in the team"""
     all_players = []
-    for pos in ['GKP', 'DEF', 'MID', 'FWD']:
+    for pos in ['GK', 'DEF', 'MID', 'FWD']:
         all_players.extend(st.session_state.team[pos])
     return all_players
 
@@ -131,8 +131,8 @@ def validate_team():
     issues = []
     
     # Check formation
-    if len(st.session_state.team['GKP']) != 2:
-        issues.append(f"Need exactly 2 goalkeepers (have {len(st.session_state.team['GKP'])})")
+    if len(st.session_state.team['GK']) != 2:
+        issues.append(f"Need exactly 2 goalkeepers (have {len(st.session_state.team['GK'])})")
     if len(st.session_state.team['DEF']) != 5:
         issues.append(f"Need exactly 5 defenders (have {len(st.session_state.team['DEF'])})")
     if len(st.session_state.team['MID']) != 5:
@@ -162,9 +162,9 @@ def display_team_formation():
     st.markdown("### 👥 Your Team")
     
     # Create formation display
-    positions = ['GKP', 'DEF', 'MID', 'FWD']
+    positions = ['GK', 'DEF', 'MID', 'FWD']
     position_names = {
-        'GKP': 'Goalkeepers',
+        'GK': 'Goalkeepers',
         'DEF': 'Defenders', 
         'MID': 'Midfielders',
         'FWD': 'Forwards'
@@ -177,7 +177,7 @@ def display_team_formation():
         player_ids = st.session_state.team[pos]
         
         # Determine number of columns based on position
-        if pos == 'GKP':
+        if pos == 'GK':
             cols = st.columns(2)
             max_players = 2
         elif pos == 'DEF':
@@ -263,9 +263,9 @@ def main():
         # Position selector
         position = st.selectbox(
             "Select Position",
-            options=['GKP', 'DEF', 'MID', 'FWD'],
+            options=['GK', 'DEF', 'MID', 'FWD'],
             format_func=lambda x: {
-                'GKP': '🥅 Goalkeeper',
+                'GK': '🥅 Goalkeeper',
                 'DEF': '🛡️ Defender',
                 'MID': '⚡ Midfielder',
                 'FWD': '⚔️ Forward'
@@ -349,7 +349,7 @@ def main():
             st.markdown("### 👤 Select Player")
             
             # Check position limits
-            position_limits = {'GKP': 2, 'DEF': 5, 'MID': 5, 'FWD': 3}
+            position_limits = {'GK': 2, 'DEF': 5, 'MID': 5, 'FWD': 3}
             current_count = len(st.session_state.team[position])
             
             if current_count >= position_limits[position]:
@@ -460,10 +460,10 @@ def main():
                         st.error(result['error'])
                     else:
                         # Clear current team
-                        st.session_state.team = {'GKP': [], 'DEF': [], 'MID': [], 'FWD': []}
+                        st.session_state.team = {'GK': [], 'DEF': [], 'MID': [], 'FWD': []}
                         
                         # Add recommended players
-                        for position in ['GKP', 'DEF', 'MID', 'FWD']:
+                        for position in ['GK', 'DEF', 'MID', 'FWD']:
                             for player in result['team'][position]:
                                 st.session_state.team[position].append(player['player_id'])
                         
@@ -482,7 +482,7 @@ def main():
         st.markdown("---")
         
         if st.button("🔄 Reset Team", use_container_width=True):
-            st.session_state.team = {'GKP': [], 'DEF': [], 'MID': [], 'FWD': []}
+            st.session_state.team = {'GK': [], 'DEF': [], 'MID': [], 'FWD': []}
             st.rerun()
         
         # Save/Load section
@@ -528,7 +528,7 @@ def main():
                         st.session_state.team = team_data['formation']
                     else:
                         # Convert from player_ids list
-                        st.session_state.team = {'GKP': [], 'DEF': [], 'MID': [], 'FWD': []}
+                        st.session_state.team = {'GK': [], 'DEF': [], 'MID': [], 'FWD': []}
                         for pid in team_data['player_ids']:
                             player = st.session_state.player_data[
                                 st.session_state.player_data['player_id'] == pid
