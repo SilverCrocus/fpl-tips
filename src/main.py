@@ -7,6 +7,7 @@ import asyncio
 import functools
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 
 import click
@@ -1509,11 +1510,14 @@ def build_team(load_ids, budget):
                 "captain": team.captain,
                 "vice_captain": team.vice_captain,
                 "formation": {
-                    "goalkeepers": [p["player_id"] for p in team.goalkeepers],
-                    "defenders": [p["player_id"] for p in team.defenders],
-                    "midfielders": [p["player_id"] for p in team.midfielders],
-                    "forwards": [p["player_id"] for p in team.forwards],
+                    "GK": [p["player_id"] for p in team.goalkeepers],
+                    "DEF": [p["player_id"] for p in team.defenders],
+                    "MID": [p["player_id"] for p in team.midfielders],
+                    "FWD": [p["player_id"] for p in team.forwards],
                 },
+                "budget": team.budget,
+                "cost": team.total_cost,
+                "saved_at": datetime.now().isoformat(),
             }
 
             import json
@@ -1584,10 +1588,29 @@ def load_team(team_name):
     # Show formation
     if "formation" in team_data:
         console.print("\n[bold]Formation:[/bold]")
-        console.print(f"  GK: {len(team_data['formation']['GK'])} players")
-        console.print(f"  DEF: {len(team_data['formation']['DEF'])} players")
-        console.print(f"  MID: {len(team_data['formation']['MID'])} players")
-        console.print(f"  FWD: {len(team_data['formation']['FWD'])} players")
+        
+        # Handle different position key formats for backward compatibility
+        formation = team_data['formation']
+        
+        # Map GKP to GK if needed (for backward compatibility)
+        gk_key = "GK" if "GK" in formation else "GKP"
+        gk_players = formation.get(gk_key, [])
+        
+        # Handle long format position keys (goalkeepers, defenders, etc.)
+        if "goalkeepers" in formation:
+            gk_players = formation["goalkeepers"]
+            def_players = formation.get("defenders", [])
+            mid_players = formation.get("midfielders", [])
+            fwd_players = formation.get("forwards", [])
+        else:
+            def_players = formation.get("DEF", [])
+            mid_players = formation.get("MID", [])
+            fwd_players = formation.get("FWD", [])
+        
+        console.print(f"  GK: {len(gk_players)} players")
+        console.print(f"  DEF: {len(def_players)} players")
+        console.print(f"  MID: {len(mid_players)} players")
+        console.print(f"  FWD: {len(fwd_players)} players")
 
     console.print("\n[bold]Commands to use with this team:[/bold]")
     console.print(f"• Edit team: [cyan]python fpl.py build-team -l '{player_ids_str}'[/cyan]")
