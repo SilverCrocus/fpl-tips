@@ -118,6 +118,15 @@ async def fetch_data(gameweek):
                             "player_id"
                         ].nunique()
                         console.print(f"  • {matched_count} FPL players have real bookmaker odds")
+
+                    # Fetch clean sheet probabilities from BTTS odds
+                    console.print("[yellow]→[/yellow] Fetching clean sheet probabilities from BTTS odds...")
+                    clean_sheet_data = await odds_collector.get_all_clean_sheet_probabilities()
+                    if not clean_sheet_data.empty:
+                        console.print(f"[green]✓[/green] Retrieved clean sheet probabilities for {len(clean_sheet_data)} teams")
+                    else:
+                        console.print("[yellow]⚠[/yellow] No clean sheet data available (BTTS markets may not be available)")
+                        clean_sheet_data = None
                 else:
                     console.print(
                         "[red]✗[/red] No player odds available - cannot provide accurate recommendations"
@@ -126,6 +135,7 @@ async def fetch_data(gameweek):
                         "[yellow]Note: This system requires real bookmaker odds for accuracy[/yellow]"
                     )
                     player_odds = None
+                    clean_sheet_data = None
 
             except Exception as e:
                 console.print(f"[red]Error fetching odds: {e}[/red]")
@@ -152,9 +162,14 @@ async def fetch_data(gameweek):
     else:
         extended_fixtures_df = fixtures_df
 
+    # Ensure clean_sheet_data is defined if not fetching odds
+    if 'clean_sheet_data' not in locals():
+        clean_sheet_data = None
+
     unified_data = merger.create_unified_dataset(
         players_df,
         player_odds if not player_odds.empty else None,
+        clean_sheet_data,  # Clean sheet data (new parameter)
         None,  # Elo data would go here
         extended_fixtures_df,  # Pass fixtures data
         gameweek=gameweek,

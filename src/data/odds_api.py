@@ -175,6 +175,215 @@ class PlayerPropsCollector:
 
         return data or {}
 
+    async def get_team_markets_odds(self, event_id: str, event_name: str = "") -> dict:
+        """Get team-level betting markets including BTTS for clean sheet calculation
+
+        Args:
+            event_id: The event ID from get_upcoming_matches
+            event_name: Optional name for logging
+
+        Returns:
+            Dictionary with team market odds data
+        """
+        cache_key = f"team_markets_{event_id}"
+        cached = self._load_from_cache(cache_key)
+
+        if cached:
+            return cached
+
+        logger.info(f"Fetching team markets (BTTS, totals) for {event_name or event_id}")
+
+        url = f"{self.BASE_URL}/sports/{self.SPORT}/events/{event_id}/odds"
+        params = {
+            "apiKey": self.api_key,
+            "regions": "us",
+            "markets": "btts,totals,h2h",  # Both teams to score, over/under, match winner
+            "oddsFormat": "decimal",
+        }
+
+        data = await self._fetch(url, params)
+
+        if data:
+            self._save_to_cache(data, cache_key)
+
+        return data or {}
+
+    def calculate_clean_sheet_probabilities(self, team_markets_data: dict, home_team: str, away_team: str) -> dict:
+        """Calculate clean sheet probabilities from BTTS and other team market odds
+
+        Args:
+            team_markets_data: Raw odds data from get_team_markets_odds
+            home_team: Name of home team
+            away_team: Name of away team
+
+        Returns:
+            Dictionary with clean sheet probabilities for both teams
+        """
+        clean_sheet_probs = {
+            "home_clean_sheet_prob": None,
+            "away_clean_sheet_prob": None,
+            "btts_no_prob": None,
+            "btts_yes_prob": None
+        }
+
+        if not team_markets_data or "bookmakers" not in team_markets_data:
+            return clean_sheet_probs
+
+        # Find BTTS odds from bookmakers
+        btts_odds = {"yes": [], "no": []}
+        h2h_odds = {"home": [], "draw": [], "away": []}
+
+        for bookmaker in team_markets_data["bookmakers"]:
+            for market in bookmaker.get("markets", []):
+                # Process BTTS market
+                if market["key"] == "btts":
+                    for outcome in market.get("outcomes", []):
+                        if outcome["name"].lower() == "yes":
+                            btts_odds["yes"].append(outcome["price"])
+                        elif outcome["name"].lower() == "no":
+                            btts_odds["no"].append(outcome["price"])
+
+                # Process H2H (match winner) market for additional context
+                elif market["key"] == "h2h":
+                    for outcome in market.get("outcomes", []):
+                        if outcome["name"] == home_team:
+                            h2h_odds["home"].append(outcome["price"])
+                        elif outcome["name"] == away_team:
+                            h2h_odds["away"].append(outcome["price"])
+                        elif outcome["name"].lower() == "draw":
+                            h2h_odds["draw"].append(outcome["price"])
+
+        # Calculate average odds if multiple bookmakers
+        if btts_odds["no"]:
+            avg_btts_no = sum(btts_odds["no"]) / len(btts_odds["no"])
+            avg_btts_yes = sum(btts_odds["yes"]) / len(btts_odds["yes"]) if btts_odds["yes"] else 10.0
+
+            # Convert odds to probabilities (with normalization)
+            prob_btts_no = 1 / avg_btts_no
+            prob_btts_yes = 1 / avg_btts_yes
+            total = prob_btts_no + prob_btts_yes
+
+            # Normalize to sum to 1
+            prob_btts_no_normalized = prob_btts_no / total
+            prob_btts_yes_normalized = prob_btts_yes / total
+
+            clean_sheet_probs["btts_no_prob"] = round(prob_btts_no_normalized, 3)
+            clean_sheet_probs["btts_yes_prob"] = round(prob_btts_yes_normalized, 3)
+
+            # Calculate team-specific clean sheet probabilities
+            # When BTTS = No, at least one team keeps a clean sheet
+            # We need to estimate which team is more likely to keep the clean sheet
+
+            if h2h_odds["home"] and h2h_odds["away"]:
+                # Use match winner odds to weight clean sheet probabilities
+                avg_home_win = sum(h2h_odds["home"]) / len(h2h_odds["home"])
+                avg_away_win = sum(h2h_odds["away"]) / len(h2h_odds["away"])
+                avg_draw = sum(h2h_odds["draw"]) / len(h2h_odds["draw"]) if h2h_odds["draw"] else 4.0
+
+                # Convert to probabilities
+                prob_home_win = 1 / avg_home_win
+                prob_away_win = 1 / avg_away_win
+                prob_draw = 1 / avg_draw
+                total_h2h = prob_home_win + prob_away_win + prob_draw
+
+                # Normalize
+                prob_home_win_norm = prob_home_win / total_h2h
+                prob_away_win_norm = prob_away_win / total_h2h
+                prob_draw_norm = prob_draw / total_h2h
+
+                # Estimate clean sheet probabilities
+                # Home team keeps clean sheet when: BTTS=No AND (home wins OR 0-0 draw)
+                # Away team keeps clean sheet when: BTTS=No AND (away wins OR 0-0 draw)
+
+                # Estimate 0-0 probability (BTTS=No with draw is often 0-0)
+                prob_nil_nil = prob_btts_no_normalized * prob_draw_norm * 0.5  # Rough estimate
+
+                # Home clean sheet: wins without conceding or 0-0
+                clean_sheet_probs["home_clean_sheet_prob"] = round(
+                    prob_btts_no_normalized * prob_home_win_norm * 0.7 + prob_nil_nil, 3
+                )
+
+                # Away clean sheet: wins without conceding or 0-0
+                clean_sheet_probs["away_clean_sheet_prob"] = round(
+                    prob_btts_no_normalized * prob_away_win_norm * 0.7 + prob_nil_nil, 3
+                )
+            else:
+                # If no H2H odds, split BTTS No probability based on home advantage
+                # Home teams typically have 55-60% advantage
+                clean_sheet_probs["home_clean_sheet_prob"] = round(prob_btts_no_normalized * 0.55, 3)
+                clean_sheet_probs["away_clean_sheet_prob"] = round(prob_btts_no_normalized * 0.45, 3)
+
+            logger.info(f"Calculated clean sheet probs - Home: {clean_sheet_probs['home_clean_sheet_prob']}, "
+                       f"Away: {clean_sheet_probs['away_clean_sheet_prob']}, BTTS No: {prob_btts_no_normalized}")
+
+        return clean_sheet_probs
+
+    async def get_all_clean_sheet_probabilities(self) -> pd.DataFrame:
+        """Get clean sheet probabilities for all teams in current gameweek
+
+        Returns:
+            DataFrame with clean sheet probabilities for all teams
+        """
+        # Step 1: Get all upcoming matches
+        matches = await self.get_upcoming_matches()
+
+        if not matches:
+            logger.warning("No upcoming matches found")
+            return pd.DataFrame()
+
+        all_clean_sheet_data = []
+
+        # Step 2: Fetch team markets for each match
+        for match in matches:
+            event_id = match.get("id")
+            home_team = match.get("home_team")
+            away_team = match.get("away_team")
+            commence_time = match.get("commence_time")
+
+            match_name = f"{home_team} vs {away_team}"
+            logger.info(f"Processing team markets for {match_name}...")
+
+            # Get team market odds (BTTS, H2H, totals)
+            team_markets = await self.get_team_markets_odds(event_id, match_name)
+
+            # Calculate clean sheet probabilities
+            clean_sheet_probs = self.calculate_clean_sheet_probabilities(
+                team_markets, home_team, away_team
+            )
+
+            # Add data for both teams
+            if clean_sheet_probs["home_clean_sheet_prob"] is not None:
+                all_clean_sheet_data.append({
+                    "match_id": event_id,
+                    "team_name": home_team,
+                    "opponent": away_team,
+                    "is_home": True,
+                    "commence_time": commence_time,
+                    "prob_clean_sheet": clean_sheet_probs["home_clean_sheet_prob"],
+                    "btts_no_prob": clean_sheet_probs["btts_no_prob"],
+                    "btts_yes_prob": clean_sheet_probs["btts_yes_prob"],
+                })
+
+            if clean_sheet_probs["away_clean_sheet_prob"] is not None:
+                all_clean_sheet_data.append({
+                    "match_id": event_id,
+                    "team_name": away_team,
+                    "opponent": home_team,
+                    "is_home": False,
+                    "commence_time": commence_time,
+                    "prob_clean_sheet": clean_sheet_probs["away_clean_sheet_prob"],
+                    "btts_no_prob": clean_sheet_probs["btts_no_prob"],
+                    "btts_yes_prob": clean_sheet_probs["btts_yes_prob"],
+                })
+
+        if all_clean_sheet_data:
+            clean_sheet_df = pd.DataFrame(all_clean_sheet_data)
+            logger.info(f"Collected clean sheet probabilities for {len(clean_sheet_df)} teams")
+            return clean_sheet_df
+        else:
+            logger.warning("No clean sheet probability data available")
+            return pd.DataFrame()
+
     async def get_all_player_props_for_gameweek(self) -> pd.DataFrame:
         """Get all player goal scorer odds for current gameweek
 

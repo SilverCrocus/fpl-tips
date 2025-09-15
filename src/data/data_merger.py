@@ -159,12 +159,14 @@ class DataMerger:
 
         logger.info(f"Database initialized at {self.db_path}")
 
-    def merge_fpl_and_odds(self, fpl_data: pd.DataFrame, odds_data: pd.DataFrame) -> pd.DataFrame:
-        """Merge FPL data with betting odds
+    def merge_fpl_and_odds(self, fpl_data: pd.DataFrame, odds_data: pd.DataFrame,
+                          clean_sheet_data: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+        """Merge FPL data with betting odds including clean sheet probabilities
 
         Args:
             fpl_data: DataFrame with FPL player data
             odds_data: DataFrame with betting odds
+            clean_sheet_data: Optional DataFrame with clean sheet probabilities by team
 
         Returns:
             Merged DataFrame
@@ -215,6 +217,57 @@ class DataMerger:
             merged["odds_assist"] = merged["odds_assist"].fillna(999.0)
         if "prob_assist" in merged.columns:
             merged["prob_assist"] = merged["prob_assist"].fillna(0.001)
+
+        # Add clean sheet probabilities if available
+        if clean_sheet_data is not None and not clean_sheet_data.empty:
+            logger.info("Merging clean sheet probabilities from BTTS odds...")
+
+            # Merge clean sheet probabilities by team name
+            if "team_name" in merged.columns and "team_name" in clean_sheet_data.columns:
+                # Select relevant columns from clean sheet data
+                clean_sheet_cols = ["team_name", "prob_clean_sheet"]
+                if "btts_no_prob" in clean_sheet_data.columns:
+                    clean_sheet_cols.append("btts_no_prob")
+                if "btts_yes_prob" in clean_sheet_data.columns:
+                    clean_sheet_cols.append("btts_yes_prob")
+
+                # Group by team to get average if multiple matches
+                team_clean_sheet = clean_sheet_data[clean_sheet_cols].groupby("team_name").mean()
+
+                # Merge with player data
+                merged = merged.merge(
+                    team_clean_sheet,
+                    left_on="team_name",
+                    right_index=True,
+                    how="left",
+                    suffixes=("", "_team")
+                )
+
+                # Log statistics
+                teams_with_cs = merged["prob_clean_sheet"].notna().sum()
+                logger.info(f"Players with clean sheet probabilities: {teams_with_cs}/{len(merged)} "
+                           f"({teams_with_cs/len(merged)*100:.1f}%)")
+
+                # Apply clean sheet probabilities only to defensive players
+                # Non-defensive players shouldn't have clean sheet probabilities
+                non_defensive_mask = ~merged["position"].isin(["GK", "DEF"])
+                merged.loc[non_defensive_mask, "prob_clean_sheet"] = 0.0
+
+                # Mark that we have real clean sheet odds for defensive players
+                defensive_mask = merged["position"].isin(["GK", "DEF"])
+                merged.loc[defensive_mask & merged["prob_clean_sheet"].notna(), "has_real_clean_sheet"] = True
+            else:
+                logger.warning("Cannot merge clean sheet data - missing team_name column")
+                merged["prob_clean_sheet"] = np.nan
+                merged["has_real_clean_sheet"] = False
+        else:
+            # No clean sheet data available
+            merged["prob_clean_sheet"] = np.nan
+            merged["has_real_clean_sheet"] = False
+
+        # Fill missing clean sheet probabilities with conservative defaults
+        if "prob_clean_sheet" not in merged.columns:
+            merged["prob_clean_sheet"] = np.nan
 
         # Log how many players have odds
         players_with_odds = merged["has_real_odds"].sum()
@@ -437,7 +490,8 @@ class DataMerger:
 
         # For NaN values, check if player has been playing recently (form > 0 suggests they're active)
         has_recent_form = data.get("form", 0) > 0
-        chance = chance.fillna(np.where(has_recent_form, 100, 50))
+        # Use mask to fill different values based on form
+        chance = chance.where(chance.notna(), other=np.where(has_recent_form, 100, 50))
 
         data["is_available"] = (chance >= 75).astype(int)
 
@@ -485,6 +539,7 @@ class DataMerger:
         self,
         fpl_data: pd.DataFrame,
         odds_data: Optional[pd.DataFrame] = None,
+        clean_sheet_data: Optional[pd.DataFrame] = None,
         elo_data: Optional[pd.DataFrame] = None,
         fixtures_data: Optional[pd.DataFrame] = None,
         gameweek: int = 1,
@@ -495,6 +550,7 @@ class DataMerger:
         Args:
             fpl_data: FPL player data
             odds_data: Betting odds data
+            clean_sheet_data: Clean sheet probabilities by team
             elo_data: Team Elo ratings
             fixtures_data: Fixtures with difficulty ratings
             gameweek: Gameweek number
@@ -516,7 +572,7 @@ class DataMerger:
                 "Odds data is required. System cannot function without real betting odds."
             )
 
-        unified = self.merge_fpl_and_odds(unified, odds_data)
+        unified = self.merge_fpl_and_odds(unified, odds_data, clean_sheet_data)
         unified["has_odds_data"] = 1
 
         # TODO: Implement proper Elo data source
@@ -596,6 +652,8 @@ class DataMerger:
             unified["prob_assist"] = np.nan
         if "odds_clean_sheet" not in unified.columns:
             unified["odds_clean_sheet"] = np.nan
+        # prob_clean_sheet should already be set from clean_sheet_data if available
+        # Only add if completely missing
         if "prob_clean_sheet" not in unified.columns:
             unified["prob_clean_sheet"] = np.nan
 
@@ -821,10 +879,6 @@ class DataMerger:
                 cursor.executemany(insert_query, insert_data.values.tolist())
                 rows_inserted = cursor.rowcount
 
-                # Commit the insert
-                self.conn.commit()
-                cursor.close()
-
                 logger.info(f"Saved {rows_inserted} records to {table}")
 
                 # Verify the insert worked
@@ -834,8 +888,11 @@ class DataMerger:
                     self.conn.execute("ROLLBACK")
                     raise ValueError(f"Insert verification failed: expected {len(data)}, got {final_count}")
 
-                # Commit the transaction
-                self.conn.execute("COMMIT")
+                # Close cursor after verification
+                cursor.close()
+
+                # Commit the transaction only once at the end
+                self.conn.commit()
         except Exception as e:
             logger.error(f"Database error: {e}")
             logger.error(f"Error type: {type(e).__name__}")
