@@ -86,22 +86,39 @@ class RuleBasedScorer:
                 raise ValueError(
                     f"No recent gameweek data or form data available for player {player.get('player_name', 'unknown')}"
                 )
-            # Calculate from form if no gameweek details
+            # Use sigmoid function for smooth transition based on form
             form = player["form"]
-            if form <= 3.0:
-                return 0.75  # 75% blank rate for very low form
-            elif form <= 4.5:
-                return 0.50  # 50% blank rate for low form
-            elif form <= 6.0:
-                return 0.25  # 25% blank rate for decent form
-            else:
-                return 0.10  # 10% blank rate for high form
+            # Sigmoid: 1 / (1 + exp(k * (form - midpoint)))
+            # midpoint=5.0 (average form), k=0.8 (steepness)
+            blank_prob = 1 / (1 + np.exp(0.8 * (form - 5.0)))
+            # Scale to reasonable range (10% to 75%)
+            return 0.1 + 0.65 * blank_prob
 
         # Calculate actual blank percentage
         blanks = sum(1 for pts in recent_points if pts <= 3)
         total_games = len(recent_points)
 
         return blanks / total_games if total_games > 0 else 0
+
+    def calculate_sample_size_factor(self, player: pd.Series) -> float:
+        """Calculate sample size adjustment factor
+
+        Args:
+            player: Player data
+
+        Returns:
+            Adjustment factor (0-1) based on minutes played
+        """
+        minutes = player.get("minutes", 0)
+
+        # Sigmoid function: starts penalizing below 270 minutes (3 full games)
+        # Reaches 0.5 at 90 minutes (1 game), 0.95 at 450 minutes (5 games)
+        if minutes <= 0:
+            return 0.1  # Minimal score for players with no minutes
+
+        # Smooth sigmoid transition
+        factor = 1 / (1 + np.exp(-0.01 * (minutes - 270)))
+        return max(0.1, min(1.0, factor))
 
     def score_player(self, player: pd.Series) -> float:
         """Score a single player
@@ -136,12 +153,29 @@ class RuleBasedScorer:
                 continue
             value = player[feature]
             if pd.notna(value):
-                score += weight * float(value)
+                # Apply sample size adjustment to form-based features
+                if feature in ["form", "gameweek_points"]:
+                    sample_factor = self.calculate_sample_size_factor(player)
+                    # Reduce weight for small sample sizes
+                    adjusted_weight = weight * sample_factor
+                    score += adjusted_weight * float(value)
+                else:
+                    score += weight * float(value)
 
         # Apply consistency penalty (penalize volatile performers)
         blank_percentage = self.calculate_blank_percentage(player)
-        consistency_penalty = -1.5  # Negative weight for blanks
-        score += consistency_penalty * blank_percentage
+        # Dynamic penalty based on player quality (higher quality players get less penalty)
+        base_penalty = -1.5
+        if "total_points" in player.index:
+            # Reduce penalty for proven high performers
+            quality_factor = min(1.0, player["total_points"] / 150)  # Normalize to 0-1
+            consistency_penalty = base_penalty * (1 - 0.3 * quality_factor)  # Up to 30% reduction
+        else:
+            consistency_penalty = base_penalty
+
+        # Apply sample size factor to consistency penalty too
+        sample_factor = self.calculate_sample_size_factor(player)
+        score += consistency_penalty * blank_percentage * sample_factor
 
         # Apply availability penalty
         if "chance_of_playing_next_round" not in player.index:
@@ -151,12 +185,22 @@ class RuleBasedScorer:
         if player["chance_of_playing_next_round"] < 75:
             score *= player["chance_of_playing_next_round"] / 100
 
-        # Apply price consideration
+        # Apply price consideration - use logarithmic scaling for smooth value curve
         if "price" not in player.index:
             raise ValueError(f"Missing price for player {player.get('player_name', 'unknown')}")
         price = player["price"]
-        price_factor = max(1.0, 1 + 0.01 * (10 - price))
+        # Logarithmic scaling: gives boost to cheaper players, penalty to expensive ones
+        # median_price ~ 7.0 for typical FPL
+        median_price = 7.0
+        price_factor = np.exp(-0.1 * np.log(price / median_price))
         score = score * price_factor
+
+        # Apply overall sample size penalty
+        # This ensures players with very few minutes get heavily penalized
+        final_sample_factor = self.calculate_sample_size_factor(player)
+        if final_sample_factor < 0.5:
+            # Extra penalty for very low sample sizes
+            score *= (0.3 + 0.7 * final_sample_factor)
 
         return max(0, score)  # Ensure non-negative
 

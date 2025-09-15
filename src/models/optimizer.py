@@ -342,10 +342,11 @@ class MILPOptimizer:
             ]
         )
 
-        # Subtract bench points (they don't score unless substituted)
-        objective -= lpSum(
+        # Add small value for bench players (they can substitute)
+        # Typical substitution probability is 10-15% based on injuries/rotation
+        objective += lpSum(
             [
-                expected_points[i] * self.variables["bench"][i] * 0.9  # Small penalty for benching
+                expected_points[i] * self.variables["bench"][i] * 0.1  # 10% substitution probability
                 for i in players
             ]
         )

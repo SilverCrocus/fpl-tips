@@ -399,6 +399,184 @@ class FPLAPICollector:
 
         return result
 
+    async def get_team_history(self, team_id: int, use_cache: bool = True) -> dict:
+        """Get team's historical data and season performance
+
+        Args:
+            team_id: FPL team ID
+            use_cache: Whether to use cached data
+
+        Returns:
+            Team history dictionary containing current team, past seasons, chips, etc.
+        """
+        cache_path = self._get_cache_path("team_history", str(team_id))
+
+        if use_cache:
+            cached_data = self._load_from_cache(cache_path, max_age_hours=4)
+            if cached_data:
+                return cached_data
+
+        url = f"{self.BASE_URL}/entry/{team_id}/history/"
+        try:
+            data = await self._fetch(url)
+            self._save_to_cache(data, cache_path)
+            return data
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching team history for ID {team_id}: {e}")
+            raise ValueError(f"Could not fetch team {team_id}. Team may be private or ID is invalid.")
+
+    async def get_team_entry(self, team_id: int, use_cache: bool = True) -> dict:
+        """Get team's entry data including name and manager
+
+        Args:
+            team_id: FPL team ID
+            use_cache: Whether to use cached data
+
+        Returns:
+            Team entry dictionary containing team name, manager name, etc.
+        """
+        cache_path = self._get_cache_path("team_entry", str(team_id))
+
+        if use_cache:
+            cached_data = self._load_from_cache(cache_path, max_age_hours=4)
+            if cached_data:
+                return cached_data
+
+        url = f"{self.BASE_URL}/entry/{team_id}/"
+        try:
+            data = await self._fetch(url)
+            self._save_to_cache(data, cache_path)
+            return data
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching team entry for ID {team_id}: {e}")
+            return None
+
+    async def get_team_picks(self, team_id: int, gameweek: int, use_cache: bool = True) -> dict:
+        """Get team's picks for a specific gameweek
+
+        Args:
+            team_id: FPL team ID
+            gameweek: Gameweek number
+            use_cache: Whether to use cached data
+
+        Returns:
+            Team picks dictionary containing squad, captain, transfers, etc.
+        """
+        cache_path = self._get_cache_path("team_picks", f"{team_id}_gw{gameweek}")
+
+        if use_cache:
+            cached_data = self._load_from_cache(cache_path, max_age_hours=2)
+            if cached_data:
+                return cached_data
+
+        url = f"{self.BASE_URL}/entry/{team_id}/event/{gameweek}/picks/"
+        try:
+            data = await self._fetch(url)
+            self._save_to_cache(data, cache_path)
+            return data
+        except aiohttp.ClientError as e:
+            logger.error(f"Error fetching team picks for ID {team_id}, GW {gameweek}: {e}")
+            raise ValueError(f"Could not fetch team picks for team {team_id} in GW {gameweek}")
+
+    async def get_current_team(self, team_id: int, use_cache: bool = True) -> dict:
+        """Get team's current squad (latest gameweek)
+
+        Args:
+            team_id: FPL team ID
+            use_cache: Whether to use cached data
+
+        Returns:
+            Dictionary with team picks and metadata for current gameweek
+        """
+        # First get bootstrap data to find current gameweek
+        if not self._bootstrap_data:
+            self._bootstrap_data = await self.get_bootstrap_data()
+
+        # Find current gameweek
+        current_gw = None
+        for event in self._bootstrap_data["events"]:
+            if event["is_current"]:
+                current_gw = event["id"]
+                break
+
+        if not current_gw:
+            # If no current gameweek, find the latest finished one
+            for event in reversed(self._bootstrap_data["events"]):
+                if event["finished"]:
+                    current_gw = event["id"]
+                    break
+
+        if not current_gw:
+            raise ValueError("Could not determine current gameweek")
+
+        logger.info(f"Fetching team {team_id} for gameweek {current_gw}")
+        return await self.get_team_picks(team_id, current_gw, use_cache)
+
+    def transform_api_team_to_myteam(self, team_picks_data: dict, team_history_data: dict, team_entry_data: dict = None) -> dict:
+        """Transform FPL API team data to MyTeam structure
+
+        Args:
+            team_picks_data: Response from get_team_picks or get_current_team
+            team_history_data: Response from get_team_history
+            team_entry_data: Response from get_team_entry (optional)
+
+        Returns:
+            Dictionary with MyTeam-compatible structure
+        """
+        # Extract player IDs from picks
+        player_ids = [pick["element"] for pick in team_picks_data.get("picks", [])]
+
+        # Find captain and vice-captain
+        captain_id = None
+        vice_captain_id = None
+        for pick in team_picks_data.get("picks", []):
+            if pick.get("is_captain"):
+                captain_id = pick["element"]
+            if pick.get("is_vice_captain"):
+                vice_captain_id = pick["element"]
+
+        # Calculate bank balance
+        # Team value includes bank money
+        entry_history = team_picks_data.get("entry_history", {})
+        bank = entry_history.get("bank", 0) / 10.0  # Convert from tenths to actual value
+
+        # Get chip availability from history
+        chips_used = set()
+        for chip in team_history_data.get("chips", []):
+            chips_used.add(chip["name"])
+
+        # Extract team metadata - prefer team_entry_data if available
+        if team_entry_data:
+            team_name = team_entry_data.get("name", "Unknown Team")
+            manager_name = f"{team_entry_data.get('player_first_name', '')} {team_entry_data.get('player_last_name', '')}".strip() or "Unknown Manager"
+        else:
+            # Fallback to team_history_data
+            entry_data = team_history_data.get("entry", {})
+            team_name = entry_data.get("name", "Unknown Team")
+            manager_name = f"{entry_data.get('player_first_name', '')} {entry_data.get('player_last_name', '')}".strip() or "Unknown Manager"
+
+        # Extract team metadata
+        return {
+            "players": player_ids,
+            "captain": captain_id,
+            "vice_captain": vice_captain_id,
+            "bank": bank,
+            # Free transfers: FPL API doesn't provide this directly
+            # Need to calculate based on transfer history
+            # For now, return None so the UI can ask the user
+            "free_transfers": None,
+            "wildcard_available": "wildcard" not in chips_used,
+            "free_hit_available": "freehit" not in chips_used,
+            "bench_boost_available": "bboost" not in chips_used,
+            "triple_captain_available": "3xc" not in chips_used,
+            "team_value": entry_history.get("value", 1000) / 10.0,
+            "total_points": entry_history.get("total_points", 0),
+            "gameweek_points": entry_history.get("points", 0),
+            "overall_rank": entry_history.get("overall_rank", None),
+            "team_name": team_name,
+            "manager_name": manager_name
+        }
+
     async def fetch_historical_season(self, season: str = "2024-25") -> pd.DataFrame:
         """Fetch complete historical data for a season
 

@@ -30,7 +30,7 @@ class DataMerger:
 
     def _initialize_database(self):
         """Initialize SQLite database with tables"""
-        self.conn = sqlite3.connect(self.db_path, isolation_level="DEFERRED")
+        self.conn = sqlite3.connect(self.db_path, isolation_level=None)  # Use autocommit for explicit transaction control
 
         # Create tables
         queries = [
@@ -194,24 +194,31 @@ class DataMerger:
             odds_data[["player_id"] + merge_cols],
             left_on="id",
             right_on="player_id",
-            how="inner",  # Changed from 'left' to 'inner' - only keep players with odds
+            how="left",  # Use left join to keep ALL FPL players, even without odds
             suffixes=("", "_odds"),
         )
-        # Drop the duplicate player_id column from odds
-        merged = merged.drop("player_id", axis=1)
+        # Drop the duplicate player_id column from odds if it exists
+        if "player_id" in merged.columns:
+            merged = merged.drop("player_id", axis=1)
 
         # Mark players with real odds
         if "is_real_odds" in merged.columns:
-            merged["has_real_odds"] = merged["is_real_odds"]
+            merged["has_real_odds"] = merged["is_real_odds"].fillna(False)
         else:
-            # All records should have odds since we did inner join
-            merged["has_real_odds"] = True
+            # Check if player has odds data
+            merged["has_real_odds"] = merged["odds_goal"].notna()
 
-        # Validate that we have sufficient players with odds
-        if len(merged) < 50:
-            raise ValueError(
-                f"Insufficient players with odds data: only {len(merged)} players found (minimum 50 required)"
-            )
+        # Fill missing odds data with defaults
+        merged["odds_goal"] = merged["odds_goal"].fillna(999.0)  # High odds = low probability
+        merged["prob_goal"] = merged["prob_goal"].fillna(0.001)  # Very low probability
+        if "odds_assist" in merged.columns:
+            merged["odds_assist"] = merged["odds_assist"].fillna(999.0)
+        if "prob_assist" in merged.columns:
+            merged["prob_assist"] = merged["prob_assist"].fillna(0.001)
+
+        # Log how many players have odds
+        players_with_odds = merged["has_real_odds"].sum()
+        logger.info(f"Players with betting odds: {players_with_odds}/{len(merged)} ({players_with_odds/len(merged)*100:.1f}%)")
 
         logger.info(f"Merged FPL and odds data: {len(merged)} records")
         return merged
@@ -395,7 +402,8 @@ class DataMerger:
             labels=[5, 4, 3, 2, 1],  # 5 = very hard, 1 = very easy
         )
         # Convert to regular integers, not categorical
-        data["fixture_difficulty"] = fixture_diff_categorical.astype("int64")
+        # Create new column for Elo-based difficulty instead of overwriting
+        data["fixture_difficulty_elo"] = fixture_diff_categorical.astype("int64")
 
         # Position-specific features
         data["is_goalkeeper"] = (data["position"] == "GK").astype(int)
@@ -409,7 +417,7 @@ class DataMerger:
         # Goal involvement rate - safe division
         minutes_played = data["minutes"].fillna(0).clip(lower=1)  # At least 1 minute
         games_played = (minutes_played / 90).clip(lower=0.1)  # At least 0.1 games
-        data["goal_involvement"] = (
+        data["goal_involvement_rate"] = (  # Rate per game, not total
             data["goals_scored"].fillna(0) + data["assists"].fillna(0)
         ) / games_played
 
@@ -423,11 +431,15 @@ class DataMerger:
         # Availability flag - require chance_of_playing_next_round to exist
         if "chance_of_playing_next_round" not in data.columns:
             raise ValueError("Missing required column: chance_of_playing_next_round")
-        # NaN means no injury concerns (100% available), >= 75% is considered available
-        data["is_available"] = (
-            data["chance_of_playing_next_round"].isna() | 
-            (data["chance_of_playing_next_round"] >= 75)
-        ).astype(int)
+        # Conservative approach: only consider players available if explicitly >= 75%
+        # NaN is treated as uncertain (50% assumed) unless player has been playing recently
+        chance = data["chance_of_playing_next_round"].copy()
+
+        # For NaN values, check if player has been playing recently (form > 0 suggests they're active)
+        has_recent_form = data.get("form", 0) > 0
+        chance = chance.fillna(np.where(has_recent_form, 100, 50))
+
+        data["is_available"] = (chance >= 75).astype(int)
 
         # Data quality score
         data["data_quality"] = self._calculate_data_quality(data)
@@ -814,11 +826,24 @@ class DataMerger:
                 cursor.close()
 
                 logger.info(f"Saved {rows_inserted} records to {table}")
+
+                # Verify the insert worked
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE gameweek = ? AND season = ?", (gameweek, season))
+                final_count = cursor.fetchone()[0]
+                if final_count != len(data):
+                    self.conn.execute("ROLLBACK")
+                    raise ValueError(f"Insert verification failed: expected {len(data)}, got {final_count}")
+
+                # Commit the transaction
+                self.conn.execute("COMMIT")
         except Exception as e:
             logger.error(f"Database error: {e}")
             logger.error(f"Error type: {type(e).__name__}")
             # Rollback on error
-            self.conn.rollback()
+            try:
+                self.conn.execute("ROLLBACK")
+            except Exception:
+                pass  # Rollback might fail if connection is broken
             raise
 
     def _update_existing_records(self, data: pd.DataFrame, table: str):

@@ -80,7 +80,7 @@ This is a Fantasy Premier League (FPL) recommendation system that combines:
 ## Important Technical Details
 
 ### API Keys and Rate Limits
-- The Odds API key is configured: `18405dde82249ca0a31950d7819767c7`
+- The Odds API key must be configured in the `.env` file as `ODDS_API_KEY`
 - Quota: 20,000 requests total
 - Optimization: Only fetches TAB odds (saves 90% of API calls vs all bookmakers)
 

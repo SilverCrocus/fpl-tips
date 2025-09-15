@@ -794,6 +794,8 @@ def search(search_term, team, position, max_price):
 
 
 @cli.command()
+@click.argument("team_id", type=int, required=False)
+@click.option("--team-id", "-tid", "team_id_option", type=int, help="FPL Team ID (alternative to positional argument)")
 @click.option("--player-ids", "-p", help='Comma-separated player IDs (e.g., "1,15,234")')
 @click.option("--player-names", "-n", help="Comma-separated player names (will auto-find IDs)")
 @click.option("--transfers", "-t", type=int, help="Number of free transfers available")
@@ -805,6 +807,8 @@ def search(search_term, team, position, max_price):
 @click.option("--gameweek", "-gw", type=int, help="Gameweek to analyze")
 @click.option("--no-interactive", is_flag=True, help="Disable interactive prompts")
 def my_team(
+    team_id,
+    team_id_option,
     player_ids,
     player_names,
     transfers,
@@ -818,28 +822,128 @@ def my_team(
 ):
     """Analyze your team and get personalized recommendations
 
+    You can provide your FPL Team ID as a positional argument or use options.
+
     Examples:
+        # SIMPLEST - Using FPL Team ID as argument:
+        uv run fpl.py my-team 7954125
+
+        # Alternative with option flag:
+        uv run fpl.py my-team --team-id 7954125
+
         # Using player IDs (find with 'search' command):
-        python src/main.py my-team -p '1,15,234,567'
+        uv run fpl.py my-team -p '1,15,234,567'
 
         # Using player names (auto-searches):
-        python src/main.py my-team -n 'Haaland,Salah,Saka,Rice'
+        uv run fpl.py my-team -n 'Haaland,Salah,Saka,Rice'
 
         # With transfers and bank:
-        python src/main.py my-team -p '1,15,234' -t 2 -b 1.5
+        uv run fpl.py my-team 7954125 -t 2 -b 1.5
     """
     console.print(Panel.fit("[bold cyan]My Team Analyzer[/bold cyan]"))
 
     # Initialize database first
     merger = DataMerger("data/fpl_data.db")
 
+    # Handle both positional and option team_id (positional takes precedence)
+    if team_id is None and team_id_option is not None:
+        team_id = team_id_option
+
+    # Get current gameweek if not specified
+    current_gameweek = gameweek
+
+    # Get current gameweek from FPL API if not provided
+    if not current_gameweek:
+        import asyncio
+        from src.data.fpl_api import FPLAPICollector
+
+        async def get_current_gw():
+            async with FPLAPICollector() as collector:
+                bootstrap = await collector.get_bootstrap_data()
+                for event in bootstrap["events"]:
+                    if event["is_current"]:
+                        return event["id"]
+                # If no current gameweek, find the latest finished one
+                for event in reversed(bootstrap["events"]):
+                    if event["finished"]:
+                        return event["id"]
+                return 1  # Default to 1 if can't determine
+
+        current_gameweek = asyncio.run(get_current_gw())
+        console.print(f"[dim]Using gameweek {current_gameweek}[/dim]")
+
+    # Handle team ID if provided (highest priority)
+    if team_id:
+        console.print(f"[dim]Fetching team data for FPL Team ID: {team_id}...[/dim]")
+
+        import asyncio
+        from src.data.fpl_api import FPLAPICollector
+
+        async def fetch_team_data():
+            async with FPLAPICollector() as collector:
+                try:
+                    # Fetch team picks and history
+                    team_picks = await collector.get_team_picks(team_id, current_gameweek)
+                    team_history = await collector.get_team_history(team_id)
+                    team_entry = await collector.get_team_entry(team_id)
+
+                    # Transform to MyTeam structure
+                    team_data = collector.transform_api_team_to_myteam(team_picks, team_history, team_entry)
+                    return team_data, team_picks, team_history
+                except ValueError as e:
+                    console.print(f"[red]Error: {e}[/red]")
+                    return None, None, None
+                except Exception as e:
+                    console.print(f"[red]Failed to fetch team data: {e}[/red]")
+                    return None, None, None
+
+        # Run async function
+        team_data, team_picks, team_history = asyncio.run(fetch_team_data())
+
+        if not team_data:
+            console.print("[yellow]Tip: Make sure the team ID is valid and the team is public[/yellow]")
+            merger.close()
+            return
+
+        # Display team info
+        console.print(f"\n[green]✓ Found team: {team_data['team_name']}[/green]")
+        console.print(f"  Manager: {team_data['manager_name']}")
+        console.print(f"  Total Points: {team_data['total_points']}")
+        console.print(f"  Overall Rank: {team_data['overall_rank']:,}" if team_data['overall_rank'] else "")
+        console.print(f"  Team Value: £{team_data['team_value']}m")
+        console.print(f"  Bank: £{team_data['bank']}m")
+
+        # Set values from fetched data
+        team_ids = team_data['players']
+        player_ids = ",".join(str(pid) for pid in team_ids)
+
+        # Override with fetched values if not explicitly provided
+        if transfers is None:
+            # FPL API doesn't provide free transfers directly, need to ask user
+            if team_data['free_transfers'] is not None:
+                transfers = team_data['free_transfers']
+        if bank is None:
+            bank = team_data['bank']
+        if wildcard is None:
+            wildcard = team_data['wildcard_available']
+        if free_hit is None:
+            free_hit = team_data['free_hit_available']
+        if bench_boost is None:
+            bench_boost = team_data['bench_boost_available']
+        if triple_captain is None:
+            triple_captain = team_data['triple_captain_available']
+
+        # Set captain and vice captain from fetched data
+        captain_id = team_data['captain']
+        vice_captain_id = team_data['vice_captain']
+
     # Handle player names if provided
     if player_names and not player_ids:
         console.print("[dim]Finding player IDs from names...[/dim]")
         names_list = [n.strip() for n in player_names.split(",")]
 
-        # Load data to search
-        all_data = merger.load_from_database()
+        # Load data to search (use current gameweek to avoid duplicates)
+        all_data = merger.load_from_database(gameweek=current_gameweek)
         if all_data.empty:
             console.print("[red]No data available. Please run 'fetch-data' first.[/red]")
             merger.close()
@@ -908,20 +1012,27 @@ def my_team(
 
     # Parse player IDs
     if not player_ids:
-        console.print("[red]Please provide either player IDs (-p) or player names (-n)[/red]")
+        console.print("[red]Please provide team ID, player IDs (-p) or player names (-n)[/red]")
         console.print("\n[yellow]Examples:[/yellow]")
-        console.print("  python src/main.py search Haaland  # Find player IDs")
-        console.print("  python src/main.py my-team -p '1,15,234'  # Use IDs")
-        console.print("  python src/main.py my-team -n 'Haaland,Salah'  # Use names")
+        console.print("  uv run fpl.py my-team 7954125  # Simplest - just team ID")
+        console.print("  uv run fpl.py my-team --team-id 7954125  # Alternative")
+        console.print("  uv run fpl.py search Haaland  # Find player IDs")
+        console.print("  uv run fpl.py my-team -p '1,15,234'  # Use player IDs")
+        console.print("  uv run fpl.py my-team -n 'Haaland,Salah'  # Use player names")
         merger.close()
         return
 
-    try:
-        team_ids = [int(pid.strip()) for pid in player_ids.split(",")]
-    except ValueError:
-        console.print("[red]Invalid player IDs format. Use comma-separated numbers.[/red]")
-        merger.close()
-        return
+    # Parse team_ids if not already set from team_id
+    if not team_id:
+        try:
+            team_ids = [int(pid.strip()) for pid in player_ids.split(",")]
+        except ValueError:
+            console.print("[red]Invalid player IDs format. Use comma-separated numbers.[/red]")
+            merger.close()
+            return
+        # Set default captain/vice captain for manual entry
+        captain_id = team_ids[0] if team_ids else 0
+        vice_captain_id = team_ids[1] if len(team_ids) > 1 else 0
 
     if len(team_ids) != 15:
         console.print(
@@ -929,7 +1040,8 @@ def my_team(
         )
 
     # Load data (merger already initialized above)
-    data = merger.load_from_database(gameweek=gameweek)
+    # Always use current_gameweek which is now guaranteed to be set
+    data = merger.load_from_database(gameweek=current_gameweek)
 
     if data.empty:
         console.print("[red]No data found. Please run 'fetch-data' first.[/red]")
@@ -986,8 +1098,8 @@ def my_team(
 
     my_team = MyTeam(
         players=team_ids[:15],  # Ensure max 15
-        captain=team_ids[0] if team_ids else 0,  # Default first player as captain
-        vice_captain=team_ids[1] if len(team_ids) > 1 else 0,
+        captain=captain_id,  # Use captain from team ID or default
+        vice_captain=vice_captain_id,  # Use vice captain from team ID or default
         bank=bank,
         free_transfers=transfers,
         wildcard_available=wildcard,  # Fixed: Don't invert

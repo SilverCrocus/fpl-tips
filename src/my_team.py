@@ -320,150 +320,101 @@ class TeamAnalyzer:
         }
 
     def _analyze_captain(
-        self, team_data: pd.DataFrame, captain_id: int, use_milp: bool = True
+        self, team_data: pd.DataFrame, captain_id: int
     ) -> dict:
         """Analyze captain choice using MILP optimization
 
         Args:
             team_data: DataFrame with team players
             captain_id: Current captain player ID
-            use_milp: Whether to use MILP optimization
 
         Returns:
             Captain analysis dictionary
+
+        Raises:
+            ValueError: If MILP optimization fails
         """
-        if use_milp:
-            # Use MILP captain selector
-            milp_captain = MILPCaptainSelector(team_data)
+        # Use MILP captain selector
+        milp_captain = MILPCaptainSelector(team_data)
 
-            # Get optimal captain and vice-captain
-            team_ids = team_data["player_id"].tolist()
-            result = milp_captain.select_captain_and_vice(
-                team_ids=team_ids, consider_effective_ownership=True
-            )
-
-            if "error" not in result and result.get("captain"):
-                # Get current captain data
-                captain_data = team_data[team_data["player_id"] == captain_id]
-                current_captain_name = (
-                    captain_data.iloc[0]["player_name"] if not captain_data.empty else "Unknown"
-                )
-
-                # Check if current captain is the recommended one
-                is_optimal = False
-                if result["captain"].get("id") == captain_id:
-                    is_optimal = True
-
-                # Create top_3_options format for display
-                top_options = [
-                    {"player": result["captain"]["name"], "score": result["captain"]["score"]}
-                ]
-
-                if result.get("vice_captain"):
-                    top_options.append(
-                        {
-                            "player": result["vice_captain"]["name"],
-                            "score": result["vice_captain"]["score"],
-                        }
-                    )
-
-                # Add third option if available in team data
-                team_scored = team_data.copy()
-                if "model_score" in team_scored.columns:
-                    # Exclude captain and vice from third option
-                    exclude_ids = [
-                        result["captain"].get("id"),
-                        result["vice_captain"].get("id") if result.get("vice_captain") else None,
-                    ]
-                    other_options = team_scored[
-                        ~team_scored["player_id"].isin([id for id in exclude_ids if id])
-                    ]
-                    if not other_options.empty:
-                        third = other_options.nlargest(1, "model_score").iloc[0]
-                        top_options.append(
-                            {"player": third["player_name"], "score": third["model_score"]}
-                        )
-
-                return {
-                    "current_captain": current_captain_name,
-                    "is_optimal": is_optimal,
-                    "recommended_captain": {
-                        "player": result["captain"]["name"],
-                        "score": result["captain"]["score"],
-                        "form": result["captain"].get("form", 0),
-                        "fixture": result["captain"].get("fixture_difficulty", 3),
-                    },
-                    "vice_captain": (
-                        {
-                            "player": result["vice_captain"]["name"],
-                            "score": result["vice_captain"]["score"],
-                        }
-                        if result.get("vice_captain")
-                        else None
-                    ),
-                    "top_3_options": top_options,
-                    "method": "MILP optimization",
-                    "message": (
-                        "Optimal"
-                        if is_optimal
-                        else f"Consider switching to {result['captain']['name']}"
-                    ),
-                }
-
-        # Fallback to original method if MILP fails or is disabled
-        captain_data = team_data[team_data["player_id"] == captain_id]
-
-        if captain_data.empty:
-            return {"status": "captain_not_found"}
-
-        captain = captain_data.iloc[0]
-
-        # Score all team players for captaincy (excluding goalkeepers)
-        captain_scores = []
-        for _, player in team_data.iterrows():
-            # Skip goalkeepers - they should never be captained
-            if player.get("position") == "GK":
-                continue
-
-            score = 0
-            # Properly handle NaN values
-            prob_goal = player.get("prob_goal", 0)
-            if pd.notna(prob_goal):
-                score += prob_goal * 5
-
-            form = player.get("form", 0)
-            if pd.notna(form):
-                score += form * 0.5
-
-            # Fixture difficulty (lower is better, so invert)
-            fixture_diff = player.get("fixture_difficulty")
-            if pd.notna(fixture_diff):
-                score += (5 - fixture_diff) * 0.3
-
-            # Skip players with availability issues
-            if player.get("chance_of_playing_next_round", 100) < 75:
-                score *= 0.5  # Heavily penalize injured/doubtful players
-
-            captain_scores.append({"player": player["player_name"], "score": score})
-
-        # Sort by score, handling NaN properly
-        captain_scores = sorted(
-            captain_scores, key=lambda x: x["score"] if pd.notna(x["score"]) else -999, reverse=True
+        # Get optimal captain and vice-captain
+        team_ids = team_data["player_id"].tolist()
+        result = milp_captain.select_captain_and_vice(
+            team_ids=team_ids, consider_effective_ownership=True
         )
 
+        if "error" in result or not result.get("captain"):
+            # No fallback - raise error so we can fix the issue
+            raise ValueError(
+                f"MILP captain optimization failed: {result.get('error', 'Unknown error')}\n"
+                f"Please check the team data and constraints."
+            )
+
+        # Get current captain data
+        captain_data = team_data[team_data["player_id"] == captain_id]
+        current_captain_name = (
+            captain_data.iloc[0]["player_name"] if not captain_data.empty else "Unknown"
+        )
+
+        # Check if current captain is the recommended one
+        is_optimal = False
+        if result["captain"].get("id") == captain_id:
+            is_optimal = True
+
+        # Create top_3_options format for display
+        top_options = [
+            {"player": result["captain"]["name"], "score": result["captain"]["score"]}
+        ]
+
+        if result.get("vice_captain"):
+            top_options.append(
+                {
+                    "player": result["vice_captain"]["name"],
+                    "score": result["vice_captain"]["score"],
+                }
+            )
+
+        # Add third option if available in team data
+        team_scored = team_data.copy()
+        if "model_score" in team_scored.columns:
+            # Exclude captain and vice from third option
+            exclude_ids = [
+                result["captain"].get("id"),
+                result["vice_captain"].get("id") if result.get("vice_captain") else None,
+            ]
+            other_options = team_scored[
+                ~team_scored["player_id"].isin([id for id in exclude_ids if id])
+            ]
+            if not other_options.empty:
+                third = other_options.nlargest(1, "model_score").iloc[0]
+                top_options.append(
+                    {"player": third["player_name"], "score": third["model_score"]}
+                )
+
         return {
-            "current_captain": captain["player_name"],
-            "captain_rank": next(
-                (
-                    i + 1
-                    for i, p in enumerate(captain_scores)
-                    if p["player"] == captain["player_name"]
-                ),
-                None,
+            "current_captain": current_captain_name,
+            "is_optimal": is_optimal,
+            "recommended_captain": {
+                "player": result["captain"]["name"],
+                "score": result["captain"]["score"],
+                "form": result["captain"].get("form", 0),
+                "fixture": result["captain"].get("fixture_difficulty", 3),
+            },
+            "vice_captain": (
+                {
+                    "player": result["vice_captain"]["name"],
+                    "score": result["vice_captain"]["score"],
+                }
+                if result.get("vice_captain")
+                else None
             ),
-            "recommended_captain": captain_scores[0] if captain_scores else None,
-            "top_3_options": captain_scores[:3],
-            "method": "heuristic scoring",
+            "top_3_options": top_options,
+            "method": "MILP optimization",
+            "message": (
+                "Optimal"
+                if is_optimal
+                else f"Consider switching to {result['captain']['name']}"
+            ),
         }
 
     def get_post_transfer_captain_analysis(
@@ -598,181 +549,83 @@ class TeamAnalyzer:
         return conflicts
 
     def get_transfer_recommendations(
-        self, my_team: MyTeam, num_transfers: int = 2, use_milp: bool = True
+        self, my_team: MyTeam, num_transfers: int = 2
     ) -> list[TransferRecommendation]:
         """Get transfer recommendations using MILP optimization
 
         Args:
             my_team: User's current team
             num_transfers: Number of transfers to recommend
-            use_milp: Whether to use MILP (True) or fallback to greedy (False)
 
         Returns:
             List of transfer recommendations
-        """
-        if use_milp:
-            # Use MILP optimizer
-            milp_optimizer = MILPTransferOptimizer(self.scorer, self.data)
 
-            result = milp_optimizer.optimize_transfers(
-                current_team_ids=my_team.players,
-                budget=my_team.bank,
-                free_transfers=my_team.free_transfers,
-                max_transfers=num_transfers,
-                horizon_weeks=5,
+        Raises:
+            ValueError: If MILP optimization fails
+        """
+        # Use MILP optimizer
+        milp_optimizer = MILPTransferOptimizer(self.scorer, self.data)
+
+        result = milp_optimizer.optimize_transfers(
+            current_team_ids=my_team.players,
+            budget=my_team.bank,
+            free_transfers=my_team.free_transfers,
+            max_transfers=num_transfers,
+            horizon_weeks=5,
+        )
+
+        if result.optimization_status != "optimal" or not result.transfers_out:
+            # No fallback - raise error so we can fix the issue
+            raise ValueError(
+                f"MILP optimization failed: {result.optimization_status}\n"
+                f"Please check the constraints and data. Consider:\n"
+                f"- Is there enough budget for transfers?\n"
+                f"- Are there enough eligible players with 180+ minutes?\n"
+                f"- Are the team/position constraints satisfiable?"
             )
 
-            if result.optimization_status == "optimal" and result.transfers_out:
-                # Convert MILP result to TransferRecommendation format
-                recommendations = []
+        # Convert MILP result to TransferRecommendation format
+        recommendations = []
 
-                # Initialize strategic evaluator
-                strategic_evaluator = StrategicTransferEvaluator(self.data, self.scorer)
+        # Initialize strategic evaluator
+        strategic_evaluator = StrategicTransferEvaluator(self.data, self.scorer)
 
-                for i, (player_out, player_in) in enumerate(
-                    zip(result.transfers_out, result.transfers_in)
-                ):
-                    # Get full player data for reason generation
-                    out_data = self.data[self.data["player_id"] == player_out["id"]]
-                    in_data = self.data[self.data["player_id"] == player_in["id"]]
+        for i, (player_out, player_in) in enumerate(
+            zip(result.transfers_out, result.transfers_in)
+        ):
+            # Get full player data for reason generation
+            out_data = self.data[self.data["player_id"] == player_out["id"]]
+            in_data = self.data[self.data["player_id"] == player_in["id"]]
 
-                    if not out_data.empty and not in_data.empty:
-                        reason = self._get_transfer_reason(out_data.iloc[0], in_data.iloc[0])
-                        priority = self._get_transfer_priority(out_data.iloc[0], in_data.iloc[0])
-
-                        # Strategic evaluation for hit decisions
-                        is_free_transfer = i < my_team.free_transfers
-                        hit_evaluation = strategic_evaluator.evaluate_transfer_hit(
-                            out_data.iloc[0], in_data.iloc[0], is_free_transfer
-                        )
-                    else:
-                        reason = (
-                            f"Upgrade: {player_in['score']:.1f} vs {player_out['score']:.1f} score"
-                        )
-                        priority = 2
-                        hit_evaluation = None
-
-                    recommendations.append(
-                        TransferRecommendation(
-                            player_out=player_out,
-                            player_in=player_in,
-                            net_cost=player_in["price"] - player_out["price"],
-                            score_improvement=player_in["score"] - player_out["score"],
-                            reason=reason,
-                            priority=priority,
-                            hit_evaluation=hit_evaluation,
-                        )
-                    )
-
-                return recommendations[:num_transfers]
-            else:
-                logger.warning(
-                    f"MILP optimization failed: {result.optimization_status}, falling back to greedy"
-                )
-                use_milp = False
-
-        if not use_milp:
-            # Fallback to original greedy algorithm
-            recommendations = []
-
-            # Score all players
-            all_scores = self.scorer.score_all_players(self.data)
-
-            # Get team players
-            team_data = all_scores[all_scores["player_id"].isin(my_team.players)]
-            non_team_data = all_scores[~all_scores["player_id"].isin(my_team.players)]
-
-            # Initialize strategic evaluator
-            strategic_evaluator = StrategicTransferEvaluator(self.data, self.scorer)
-
-            # Track already recommended players to avoid duplicates
-            recommended_player_ids = set()
-
-            # Prioritize injured/unavailable players first
-            unavailable_players = team_data[
-                (team_data["is_available"] == 0) if "is_available" in team_data.columns else False
-            ]
-            if "chance_of_playing_next_round" in team_data.columns:
-                doubtful_players = team_data[team_data["chance_of_playing_next_round"] < 75]
-                unavailable_players = pd.concat(
-                    [unavailable_players, doubtful_players]
-                ).drop_duplicates()
-
-            # Then find worst performers
-            worst_performers = team_data.nsmallest(5, "model_score")
-
-            # Combine unavailable and worst players (remove duplicates)
-            players_to_consider = pd.concat(
-                [unavailable_players, worst_performers]
-            ).drop_duplicates()
-            worst_players = players_to_consider.sort_values("model_score")
-
-            for transfer_idx, (_, player_out) in enumerate(worst_players.iterrows()):
-                # Find best replacement in same position within budget
-                # IMPORTANT: Use actual available budget for this specific transfer
-                available_budget = player_out["price"] + my_team.bank
-
-                # Exclude already recommended players from search
-                available_replacements = non_team_data[
-                    ~non_team_data["player_id"].isin(recommended_player_ids)
-                ]
-
-                # Filter to affordable replacements only
-                replacements = available_replacements[
-                    (available_replacements["position"] == player_out["position"])
-                    & (available_replacements["price"] <= available_budget)
-                ]
-
-                if replacements.empty:
-                    continue
-
-                # Get best replacement
-                best_replacement = replacements.nlargest(1, "model_score").iloc[0]
-
-                # Add to recommended players set
-                recommended_player_ids.add(best_replacement["player_id"])
-
-                # Calculate improvement
-                score_improvement = best_replacement["model_score"] - player_out["model_score"]
-                net_cost = best_replacement["price"] - player_out["price"]
-
-                # Determine reason and priority
-                reason = self._get_transfer_reason(player_out, best_replacement)
-                priority = self._get_transfer_priority(player_out, best_replacement)
+            if not out_data.empty and not in_data.empty:
+                reason = self._get_transfer_reason(out_data.iloc[0], in_data.iloc[0])
+                priority = self._get_transfer_priority(out_data.iloc[0], in_data.iloc[0])
 
                 # Strategic evaluation for hit decisions
-                is_free_transfer = transfer_idx < my_team.free_transfers
+                is_free_transfer = i < my_team.free_transfers
                 hit_evaluation = strategic_evaluator.evaluate_transfer_hit(
-                    player_out, best_replacement, is_free_transfer
+                    out_data.iloc[0], in_data.iloc[0], is_free_transfer
                 )
-
-                recommendations.append(
-                    TransferRecommendation(
-                        player_out={
-                            "id": player_out["player_id"],
-                            "name": player_out["player_name"],
-                            "price": player_out["price"],
-                            "score": player_out["model_score"],
-                        },
-                        player_in={
-                            "id": best_replacement["player_id"],
-                            "name": best_replacement["player_name"],
-                            "price": best_replacement["price"],
-                            "score": best_replacement["model_score"],
-                        },
-                        net_cost=net_cost,
-                        score_improvement=score_improvement,
-                        reason=reason,
-                        priority=priority,
-                        hit_evaluation=hit_evaluation,
-                    )
+            else:
+                reason = (
+                    f"Upgrade: {player_in['score']:.1f} vs {player_out['score']:.1f} score"
                 )
+                priority = 2
+                hit_evaluation = None
 
-            # Sort by priority (1=urgent first) and score improvement
-            # Priority 1 (urgent) should come first, so use ascending sort
-            recommendations.sort(key=lambda x: (x.priority, -x.score_improvement))
+            recommendations.append(
+                TransferRecommendation(
+                    player_out=player_out,
+                    player_in=player_in,
+                    net_cost=player_in["price"] - player_out["price"],
+                    score_improvement=player_in["score"] - player_out["score"],
+                    reason=reason,
+                    priority=priority,
+                    hit_evaluation=hit_evaluation,
+                )
+            )
 
-            return recommendations[:num_transfers]
+        return recommendations[:num_transfers]
 
     def _get_transfer_reason(self, player_out: pd.Series, player_in: pd.Series) -> str:
         """Generate transfer reason"""
@@ -856,7 +709,6 @@ class ChipAdvisor:
         my_team: MyTeam,
         analysis: dict,
         team_data: pd.DataFrame,
-        use_milp: bool = True,
         use_strategic: bool = True,
     ) -> dict:
         """Get advice for all available chips using strategic FPL best practices
@@ -865,81 +717,42 @@ class ChipAdvisor:
             my_team: User's team
             analysis: Team analysis results
             team_data: DataFrame with team players
-            use_milp: Whether to use MILP optimization
             use_strategic: Whether to use strategic DGW/BGW aware logic
 
         Returns:
             Dictionary with advice for each chip
         """
-        # PRIORITY: Use strategic advisor for DGW/BGW aware recommendations
-        if use_strategic:
-            strategic_advisor = StrategicChipAdvisor(self.data, self.scorer)
-
-            # Get captain analysis for Triple Captain evaluation
-            analyzer = TeamAnalyzer(self.scorer, self.data)
-            captain_analysis = analyzer._analyze_captain(team_data, my_team.captain, use_milp=False)
-
-            # Get team issues for Wildcard evaluation
-            team_issues = analysis.get("weaknesses", [])
-
-            # Build available chips dict
-            available_chips = {
-                "triple_captain": my_team.triple_captain_available,
-                "bench_boost": my_team.bench_boost_available,
-                "wildcard": my_team.wildcard_available,
-                "free_hit": my_team.free_hit_available,
-            }
-
-            # Get comprehensive strategic advice
-            return strategic_advisor.get_comprehensive_chip_strategy(
-                team_data=team_data,
-                team_issues=team_issues,
-                captain_analysis=captain_analysis,
-                available_chips=available_chips,
+        # Use strategic advisor for DGW/BGW aware recommendations
+        if not use_strategic:
+            raise ValueError(
+                "Strategic chip advisor is required. Set use_strategic=True.\n"
+                "Non-strategic chip advice has been removed per no-fallback policy."
             )
 
-        # Fallback to MILP or original methods if strategic is disabled
-        advice = {}
+        strategic_advisor = StrategicChipAdvisor(self.data, self.scorer)
 
-        if use_milp and self.scorer:
-            # Use MILP chip advisor
-            milp_advisor = MILPChipAdvisor(self.scorer, self.data)
+        # Get captain analysis for Triple Captain evaluation
+        analyzer = TeamAnalyzer(self.scorer, self.data)
+        captain_analysis = analyzer._analyze_captain(team_data, my_team.captain)
 
-            if my_team.wildcard_available:
-                # Wildcard uses full team optimization
-                advice["wildcard"] = self.should_use_wildcard(my_team, analysis)
-                if advice["wildcard"].get("use") is True:
-                    # Get optimal wildcard team
-                    advice["wildcard"]["optimal_team"] = milp_advisor.optimize_wildcard_team()
+        # Get team issues for Wildcard evaluation
+        team_issues = analysis.get("weaknesses", [])
 
-            if my_team.bench_boost_available:
-                # Use MILP to evaluate bench strength
-                team_ids = team_data["player_id"].tolist()
-                advice["bench_boost"] = milp_advisor.evaluate_bench_boost(team_ids)
+        # Build available chips dict
+        available_chips = {
+            "triple_captain": my_team.triple_captain_available,
+            "bench_boost": my_team.bench_boost_available,
+            "wildcard": my_team.wildcard_available,
+            "free_hit": my_team.free_hit_available,
+        }
 
-            if my_team.triple_captain_available:
-                # Use MILP to evaluate triple captain timing
-                team_ids = team_data["player_id"].tolist()
-                advice["triple_captain"] = milp_advisor.evaluate_triple_captain(team_ids)
-
-            if my_team.free_hit_available:
-                # Free hit still uses heuristic (could extend MILP for this)
-                advice["free_hit"] = self.should_use_free_hit(my_team, analysis, team_data)
-        else:
-            # Fallback to original methods
-            if my_team.wildcard_available:
-                advice["wildcard"] = self.should_use_wildcard(my_team, analysis)
-
-            if my_team.free_hit_available:
-                advice["free_hit"] = self.should_use_free_hit(my_team, analysis, team_data)
-
-            if my_team.bench_boost_available:
-                advice["bench_boost"] = self.should_use_bench_boost(team_data)
-
-            if my_team.triple_captain_available:
-                advice["triple_captain"] = self.should_use_triple_captain(analysis)
-
-        return advice
+        # Get comprehensive strategic advice
+        return strategic_advisor.get_comprehensive_chip_strategy(
+            team_data=team_data,
+            team_issues=team_issues,
+            captain_analysis=captain_analysis,
+            available_chips=available_chips,
+        )
 
     def should_use_wildcard(self, my_team: MyTeam, analysis: dict) -> dict:
         """Determine if wildcard should be used

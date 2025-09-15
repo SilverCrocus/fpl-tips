@@ -31,8 +31,8 @@
     "expected_assists": 1.5,
     "creativity": 0.02,
     "threat": 0.02,
-    "form": 1.5,
-    "gameweek_points": 1.0,
+    "form": 0.8,
+    "gameweek_points": 0.3,
     "fixture_difficulty": -0.2,
     "fixture_diff_next2": -0.3,
     "fixture_diff_next5": -0.2,
@@ -45,14 +45,14 @@
     "expected_goals": 1.5,
     "prob_assist": 1.5,
     "threat": 0.03,
-    "form": 1.8,
-    "gameweek_points": 1.2,
+    "form": 0.9,
+    "gameweek_points": 0.3,
     "fixture_difficulty": -0.2,
     "fixture_diff_next2": -0.3,
     "fixture_diff_next5": -0.1,
     "easy_fixtures_next5": 0.3,
     "value_ratio": 0.2,
-    "goal_involvement": 2.0,
+    "goal_involvement": 1.0,
     "minutes": 0.01
   }
 }

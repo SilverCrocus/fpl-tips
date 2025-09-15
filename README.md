@@ -89,6 +89,19 @@ Load a saved team:
 uv run fpl.py load-team my_team  # Load saved team and show options
 ```
 
+#### Analyze Your FPL Team
+Get personalized recommendations for your actual FPL team:
+```bash
+# Simplest - just provide your FPL team ID
+uv run fpl.py my-team 7954125
+
+# With additional options
+uv run fpl.py my-team 7954125 -t 2 -b 1.5  # 2 transfers, £1.5m bank
+
+# Alternative syntax (backward compatible)
+uv run fpl.py my-team --team-id 7954125
+```
+
 ### 2. Check System Status
 ```bash
 uv run fpl.py status
@@ -290,6 +303,9 @@ uv run fpl.py recommend
 
 # Build optimal team
 uv run fpl.py build-team
+
+# Analyze your FPL team (NEW: simplified syntax!)
+uv run fpl.py my-team 7954125
 
 # Test Odds API
 uv run test_odds_api.py

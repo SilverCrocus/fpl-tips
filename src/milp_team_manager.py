@@ -88,6 +88,13 @@ class MILPTransferOptimizer:
         # Filter out players that are impossible to afford even with best case scenario
         available_players = available_players[available_players["price"] <= max_available_budget]
 
+        # CRITICAL: Filter out players with insufficient playing time
+        # Require at least 180 minutes (2 full games) to consider for transfers
+        MIN_MINUTES_THRESHOLD = 180
+        if "minutes" in available_players.columns:
+            available_players = available_players[available_players["minutes"] >= MIN_MINUTES_THRESHOLD]
+            logger.info(f"Filtered to {len(available_players)} players with >= {MIN_MINUTES_THRESHOLD} minutes")
+
         # Create the optimization problem
         prob = pulp.LpProblem("Transfer_Optimization", pulp.LpMaximize)
 
@@ -348,6 +355,9 @@ class MILPCaptainSelector:
         # Get team data
         team_data = self.data[self.data["player_id"].isin(team_ids)]
 
+        # Remove duplicate players (in case of data issues)
+        team_data = team_data.drop_duplicates(subset=['player_id'])
+
         # Filter out goalkeepers (they should never be captain)
         team_data = team_data[team_data["position"] != "GK"]
 
@@ -421,20 +431,23 @@ class MILPCaptainSelector:
 
         # Constraints
 
+        # Get unique player IDs to avoid duplicate constraints
+        unique_player_ids = team_data["player_id"].unique()
+
         # 1. Exactly one captain
         prob += (
-            pulp.lpSum([captain_vars[pid] for pid in team_data["player_id"]]) == 1,
+            pulp.lpSum([captain_vars[pid] for pid in unique_player_ids]) == 1,
             "One_Captain",
         )
 
         # 2. Exactly one vice-captain
         prob += (
-            pulp.lpSum([vice_vars[pid] for pid in team_data["player_id"]]) == 1,
+            pulp.lpSum([vice_vars[pid] for pid in unique_player_ids]) == 1,
             "One_Vice_Captain",
         )
 
         # 3. Captain and vice must be different players
-        for pid in team_data["player_id"]:
+        for pid in unique_player_ids:
             prob += captain_vars[pid] + vice_vars[pid] <= 1, f"Different_{pid}"
 
         # Solve
@@ -442,20 +455,11 @@ class MILPCaptainSelector:
         status = prob.solve(solver)
 
         if status != pulp.LpStatusOptimal:
-            # Fallback to highest scorer
-            best = team_data.nlargest(2, "model_score")
-            if len(best) >= 2:
-                return {
-                    "captain": {
-                        "name": best.iloc[0]["player_name"],
-                        "score": calculate_captain_score(best.iloc[0]),
-                    },
-                    "vice_captain": {
-                        "name": best.iloc[1]["player_name"],
-                        "score": calculate_captain_score(best.iloc[1]),
-                    },
-                    "method": "fallback",
-                }
+            # No fallback - raise error so we can fix the issue
+            raise ValueError(
+                f"MILP captaincy optimization failed: {pulp.LpStatus[status]}\n"
+                f"This should not happen with a valid team. Please check the data."
+            )
 
         # Extract results
         captain = None
