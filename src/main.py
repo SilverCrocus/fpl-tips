@@ -1297,21 +1297,32 @@ def my_team(
 
     # Post-transfer lineup (if transfers recommended)
     if recommendations and transfers > 0:
-        # Take only free transfers
-        free_transfers = recommendations[:transfers]
-        post_transfer_lineup = analyzer.get_post_transfer_lineup(team_data, free_transfers)
+        # Include free transfers and recommended hit transfers
+        transfers_to_apply = []
+
+        for i, rec in enumerate(recommendations):
+            if i < transfers:
+                # Free transfer - always include
+                transfers_to_apply.append(rec)
+            elif hasattr(rec, "hit_evaluation") and rec.hit_evaluation:
+                # Hit transfer - include if recommended to TAKE
+                if rec.hit_evaluation.get("recommendation") == "TAKE":
+                    transfers_to_apply.append(rec)
+
+        post_transfer_lineup = analyzer.get_post_transfer_lineup(team_data, transfers_to_apply)
 
         if post_transfer_lineup and post_transfer_lineup.get("starting_11"):
             console.print(
-                "\n[bold cyan]🔄 Post-Transfer Lineup (after free transfers):[/bold cyan]"
+                "\n[bold cyan]🔄 Post-Transfer Lineup (after recommended transfers):[/bold cyan]"
             )
             console.print(f"Formation: [yellow]{post_transfer_lineup['formation']}[/yellow]")
 
             # Show changes
             console.print("\n[dim]Applied transfers:[/dim]")
-            for i, transfer in enumerate(free_transfers, 1):
+            for i, transfer in enumerate(transfers_to_apply, 1):
+                cost_info = " (FREE)" if i <= transfers else " (-4 pts)"
                 console.print(
-                    f"  {i}. {transfer.player_out['name']} → {transfer.player_in['name']}"
+                    f"  {i}. {transfer.player_out['name']} → {transfer.player_in['name']}{cost_info}"
                 )
 
             console.print("\n[bold]New Starting XI:[/bold]")
@@ -1325,7 +1336,7 @@ def my_team(
                     console.print(f"\n[cyan]{pos_display}:[/cyan]")
 
                 # Highlight new players
-                is_new = any(t.player_in["name"] == player["name"] for t in free_transfers)
+                is_new = any(t.player_in["name"] == player["name"] for t in transfers_to_apply)
                 if is_new:
                     console.print(
                         f"  • {player['name']} ({player['score']:.1f}) [green]✨ NEW[/green]"
@@ -1338,7 +1349,7 @@ def my_team(
                 console.print("\n[bold]New Bench:[/bold]")
                 for i, player in enumerate(post_transfer_lineup["bench"], 1):
                     pos_display = player["position"]
-                    is_new = any(t.player_in["name"] == player["name"] for t in free_transfers)
+                    is_new = any(t.player_in["name"] == player["name"] for t in transfers_to_apply)
                     new_tag = " [green]✨ NEW[/green]" if is_new else ""
                     console.print(
                         f"  {i}. {player['name']} ({pos_display}, {player['score']:.1f}){new_tag}"
