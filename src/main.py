@@ -120,12 +120,18 @@ async def fetch_data(gameweek):
                         console.print(f"  • {matched_count} FPL players have real bookmaker odds")
 
                     # Fetch clean sheet probabilities from BTTS odds
-                    console.print("[yellow]→[/yellow] Fetching clean sheet probabilities from BTTS odds...")
+                    console.print(
+                        "[yellow]→[/yellow] Fetching clean sheet probabilities from BTTS odds..."
+                    )
                     clean_sheet_data = await odds_collector.get_all_clean_sheet_probabilities()
                     if not clean_sheet_data.empty:
-                        console.print(f"[green]✓[/green] Retrieved clean sheet probabilities for {len(clean_sheet_data)} teams")
+                        console.print(
+                            f"[green]✓[/green] Retrieved clean sheet probabilities for {len(clean_sheet_data)} teams"
+                        )
                     else:
-                        console.print("[yellow]⚠[/yellow] No clean sheet data available (BTTS markets may not be available)")
+                        console.print(
+                            "[yellow]⚠[/yellow] No clean sheet data available (BTTS markets may not be available)"
+                        )
                         clean_sheet_data = None
                 else:
                     console.print(
@@ -163,7 +169,7 @@ async def fetch_data(gameweek):
         extended_fixtures_df = fixtures_df
 
     # Ensure clean_sheet_data is defined if not fetching odds
-    if 'clean_sheet_data' not in locals():
+    if "clean_sheet_data" not in locals():
         clean_sheet_data = None
 
     unified_data = merger.create_unified_dataset(
@@ -810,7 +816,13 @@ def search(search_term, team, position, max_price):
 
 @cli.command()
 @click.argument("team_id", type=int, required=False)
-@click.option("--team-id", "-tid", "team_id_option", type=int, help="FPL Team ID (alternative to positional argument)")
+@click.option(
+    "--team-id",
+    "-tid",
+    "team_id_option",
+    type=int,
+    help="FPL Team ID (alternative to positional argument)",
+)
 @click.option("--player-ids", "-p", help='Comma-separated player IDs (e.g., "1,15,234")')
 @click.option("--player-names", "-n", help="Comma-separated player names (will auto-find IDs)")
 @click.option("--transfers", "-t", type=int, help="Number of free transfers available")
@@ -903,7 +915,9 @@ def my_team(
                     team_entry = await collector.get_team_entry(team_id)
 
                     # Transform to MyTeam structure
-                    team_data = collector.transform_api_team_to_myteam(team_picks, team_history, team_entry)
+                    team_data = collector.transform_api_team_to_myteam(
+                        team_picks, team_history, team_entry
+                    )
                     return team_data, team_picks, team_history
                 except ValueError as e:
                     console.print(f"[red]Error: {e}[/red]")
@@ -916,7 +930,9 @@ def my_team(
         team_data, team_picks, team_history = asyncio.run(fetch_team_data())
 
         if not team_data:
-            console.print("[yellow]Tip: Make sure the team ID is valid and the team is public[/yellow]")
+            console.print(
+                "[yellow]Tip: Make sure the team ID is valid and the team is public[/yellow]"
+            )
             merger.close()
             return
 
@@ -924,33 +940,35 @@ def my_team(
         console.print(f"\n[green]✓ Found team: {team_data['team_name']}[/green]")
         console.print(f"  Manager: {team_data['manager_name']}")
         console.print(f"  Total Points: {team_data['total_points']}")
-        console.print(f"  Overall Rank: {team_data['overall_rank']:,}" if team_data['overall_rank'] else "")
+        console.print(
+            f"  Overall Rank: {team_data['overall_rank']:,}" if team_data["overall_rank"] else ""
+        )
         console.print(f"  Team Value: £{team_data['team_value']}m")
         console.print(f"  Bank: £{team_data['bank']}m")
 
         # Set values from fetched data
-        team_ids = team_data['players']
+        team_ids = team_data["players"]
         player_ids = ",".join(str(pid) for pid in team_ids)
 
         # Override with fetched values if not explicitly provided
         if transfers is None:
             # FPL API doesn't provide free transfers directly, need to ask user
-            if team_data['free_transfers'] is not None:
-                transfers = team_data['free_transfers']
+            if team_data["free_transfers"] is not None:
+                transfers = team_data["free_transfers"]
         if bank is None:
-            bank = team_data['bank']
+            bank = team_data["bank"]
         if wildcard is None:
-            wildcard = team_data['wildcard_available']
+            wildcard = team_data["wildcard_available"]
         if free_hit is None:
-            free_hit = team_data['free_hit_available']
+            free_hit = team_data["free_hit_available"]
         if bench_boost is None:
-            bench_boost = team_data['bench_boost_available']
+            bench_boost = team_data["bench_boost_available"]
         if triple_captain is None:
-            triple_captain = team_data['triple_captain_available']
+            triple_captain = team_data["triple_captain_available"]
 
         # Set captain and vice captain from fetched data
-        captain_id = team_data['captain']
-        vice_captain_id = team_data['vice_captain']
+        captain_id = team_data["captain"]
+        vice_captain_id = team_data["vice_captain"]
 
     # Handle player names if provided
     if player_names and not player_ids:
@@ -1126,6 +1144,8 @@ def my_team(
     # Analyze team
     weights = _load_scoring_weights()
     scorer = RuleBasedScorer(weights)
+    # Score the data to add model_score column before analysis
+    data = scorer.score_all_players(data)
     analyzer = TeamAnalyzer(scorer, data)
     analysis = analyzer.analyze_team(my_team)
 
@@ -1135,7 +1155,9 @@ def my_team(
     table.add_column("Value", style="green")
 
     team_value = analysis.get("total_team_value", 0)
+    expected_pts = analysis.get("total_expected_points", 0)
     table.add_row("Total Team Value", f"£{team_value:.1f}m")
+    table.add_row("Expected Points (GW)", f"{expected_pts:.1f} pts")
     table.add_row("Bank", f"£{bank:.1f}m")
     table.add_row("Free Transfers", str(transfers))
 
@@ -1360,7 +1382,7 @@ def my_team(
     if captain_analysis and captain_analysis.get("top_3_options"):
         console.print("\n[bold cyan]👑 Captain Options:[/bold cyan]")
         for i, opt in enumerate(captain_analysis["top_3_options"], 1):
-            console.print(f"{i}. {opt['player']} (score: {opt['score']:.1f})")
+            console.print(f"{i}. {opt['player']} (captain score: {opt['score']:.1f})")
 
     # Post-transfer captain analysis
     if recommendations and transfers > 0:
@@ -1375,7 +1397,9 @@ def my_team(
                 # Check if this player is a new transfer
                 is_new = any(t.player_in["name"] == opt["player"] for t in free_transfers)
                 new_indicator = " [green]✨ NEW[/green]" if is_new else ""
-                console.print(f"{i}. {opt['player']} (score: {opt['score']:.1f}){new_indicator}")
+                console.print(
+                    f"{i}. {opt['player']} (captain score: {opt['score']:.1f}){new_indicator}"
+                )
 
     # Comprehensive chip advice
     chip_advisor = ChipAdvisor(data)
@@ -1726,14 +1750,14 @@ def load_team(team_name):
     # Show formation
     if "formation" in team_data:
         console.print("\n[bold]Formation:[/bold]")
-        
+
         # Handle different position key formats for backward compatibility
-        formation = team_data['formation']
-        
+        formation = team_data["formation"]
+
         # Map GKP to GK if needed (for backward compatibility)
         gk_key = "GK" if "GK" in formation else "GKP"
         gk_players = formation.get(gk_key, [])
-        
+
         # Handle long format position keys (goalkeepers, defenders, etc.)
         if "goalkeepers" in formation:
             gk_players = formation["goalkeepers"]
@@ -1744,7 +1768,7 @@ def load_team(team_name):
             def_players = formation.get("DEF", [])
             mid_players = formation.get("MID", [])
             fwd_players = formation.get("FWD", [])
-        
+
         console.print(f"  GK: {len(gk_players)} players")
         console.print(f"  DEF: {len(def_players)} players")
         console.print(f"  MID: {len(mid_players)} players")

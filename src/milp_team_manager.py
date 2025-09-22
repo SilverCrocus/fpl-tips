@@ -8,6 +8,7 @@ from dataclasses import dataclass
 
 import pandas as pd
 import pulp
+from src.captain_scorer import calculate_captain_score
 
 logger = logging.getLogger(__name__)
 
@@ -147,9 +148,6 @@ class MILPTransferOptimizer:
             expected_pts = calculate_expected_points(player, horizon_weeks)
             team_score += buy_vars[player["player_id"]] * expected_pts
 
-        # Set objective (maximize points - transfer cost)
-        prob += team_score - transfer_cost, "Total_Expected_Points"
-
         # Constraints
 
         # 1. Squad size must remain 15
@@ -160,7 +158,7 @@ class MILPTransferOptimizer:
             "Squad_Size",
         )
 
-        # 2. Budget constraint
+        # 2. Budget constraint - define money variables first
         money_out = pulp.lpSum(
             [
                 (1 - keep_vars[player["player_id"]]) * player["price"]
@@ -175,6 +173,16 @@ class MILPTransferOptimizer:
             ]
         )
 
+        # Calculate money left in bank after transfers for penalty
+        money_left_in_bank = budget + money_out - money_in
+
+        # Set objective (maximize points - transfer cost - penalty for unspent money)
+        # Moderate penalty (0.5 points per £1M unspent) strongly encourages spending when it improves squad
+        # This means leaving £5.5m unspent costs 2.75 points - enough to drive better decisions
+        unspent_penalty = money_left_in_bank * 0.5
+        prob += team_score - transfer_cost - unspent_penalty, "Total_Expected_Points"
+
+        # Apply budget constraint
         prob += money_in <= money_out + budget, "Budget_Constraint"
 
         # 3. Position constraints (must maintain valid formation)
@@ -278,36 +286,80 @@ class MILPTransferOptimizer:
         bought_value = sum(p["price"] for p in transfers_in)
         new_team_value = kept_value + bought_value
 
-        # Sort transfers to ensure affordability order
-        # Pair up transfers and sort by net cost (cheapest/profitable first)
-        paired_transfers = []
-        for i in range(min(len(transfers_out), len(transfers_in))):
-            net_cost = transfers_in[i]["price"] - transfers_out[i]["price"]
-            paired_transfers.append((transfers_out[i], transfers_in[i], net_cost))
+        # Smart transfer pairing to ensure affordability
+        # Find the best pairing that maximizes individual transfer affordability
 
-        # Sort by net cost (ascending - cheapest or profitable first)
-        paired_transfers.sort(key=lambda x: x[2])
+        def find_best_pairing(outs, ins, budget):
+            """Find optimal pairing of transfers that are individually affordable"""
+            from itertools import permutations
 
-        # Validate transfer affordability in sequence
-        sorted_transfers_out = []
-        sorted_transfers_in = []
-        running_budget = budget
+            # If we have different numbers of ins and outs, trim to the minimum
+            min_count = min(len(outs), len(ins))
+            if min_count == 0:
+                return [], []
 
-        for out_player, in_player, net_cost in paired_transfers:
-            # Check if this individual transfer is affordable
-            if running_budget >= net_cost:
-                sorted_transfers_out.append(out_player)
-                sorted_transfers_in.append(in_player)
-                running_budget -= net_cost
-            else:
-                # Skip unaffordable transfers when done individually
-                # Log warning about transfer that can't be done in isolation
-                import logging
+            # For small numbers of transfers, try all permutations
+            if min_count <= 3:
+                best_score = -float('inf')
+                best_out_order = []
+                best_in_order = []
 
-                logging.warning(
-                    f"Transfer {out_player['name']} → {in_player['name']} "
-                    f"requires £{net_cost:.1f}m but only £{running_budget:.1f}m available"
-                )
+                # Try all permutations of incoming players
+                for in_perm in permutations(range(len(ins[:min_count]))):
+                    valid = True
+                    running_budget = budget
+                    total_score = 0
+
+                    # Check if this permutation creates affordable transfers
+                    for i in range(min_count):
+                        out_idx = i
+                        in_idx = in_perm[i]
+
+                        # Check affordability: bank + sale >= purchase
+                        if running_budget + outs[out_idx]["price"] >= ins[in_idx]["price"]:
+                            # Update running budget
+                            running_budget = running_budget + outs[out_idx]["price"] - ins[in_idx]["price"]
+                            # Add score gain
+                            total_score += ins[in_idx]["score"] - outs[out_idx]["score"]
+                        else:
+                            valid = False
+                            break
+
+                    # If valid and better than current best, update
+                    if valid and total_score > best_score:
+                        best_score = total_score
+                        best_out_order = list(range(min_count))
+                        best_in_order = list(in_perm)
+
+                # Return the best pairing found
+                if best_out_order:
+                    return ([outs[i] for i in best_out_order],
+                            [ins[i] for i in best_in_order])
+
+            # For larger numbers, use a greedy approach
+            # Pair transfers to maximize affordability
+            sorted_out = sorted(outs, key=lambda p: p["price"], reverse=True)  # Sell expensive first
+            sorted_in = sorted(ins, key=lambda p: p["score"], reverse=True)   # Buy best players first
+
+            paired_out = []
+            paired_in = []
+            used_in = set()
+            running_budget = budget
+
+            for out_player in sorted_out:
+                # Find best affordable incoming player not yet used
+                for i, in_player in enumerate(sorted_in):
+                    if i not in used_in and running_budget + out_player["price"] >= in_player["price"]:
+                        paired_out.append(out_player)
+                        paired_in.append(in_player)
+                        used_in.add(i)
+                        running_budget = running_budget + out_player["price"] - in_player["price"]
+                        break
+
+            return paired_out, paired_in
+
+        # Find best pairing
+        sorted_transfers_out, sorted_transfers_in = find_best_pairing(transfers_out, transfers_in, budget)
 
         # If no transfers are affordable individually, return empty result
         if not sorted_transfers_out:
@@ -379,49 +431,17 @@ class MILPCaptainSelector:
                 f"vice_{player['player_id']}", cat="Binary"
             )
 
-        # Calculate expected captain points
-        def calculate_captain_score(player):
-            """Calculate expected points for captaincy"""
-            score = 0
-
-            # Base expected points (captain gets double)
-            base_points = player.get("model_score", 0) * 2
-            score += base_points
-
-            # Consider form heavily
-            if "form" in player:
-                score += player["form"] * 1.5
-
-            # Goal probability is crucial for captain
-            if "prob_goal" in player and pd.notna(player["prob_goal"]):
-                score += player["prob_goal"] * 10
-
-            # Fixture difficulty (lower is better)
-            if "fixture_difficulty" in player and pd.notna(player["fixture_difficulty"]):
-                score += (5 - player["fixture_difficulty"]) * 2
-
-            # Penalty for injury doubt
-            if "chance_of_playing_next_round" in player:
-                if player["chance_of_playing_next_round"] < 100:
-                    score *= player["chance_of_playing_next_round"] / 100
-
-            # Effective ownership consideration
-            if consider_effective_ownership and "selected_by_percent" in player:
-                # Higher ownership means less differential
-                ownership = player["selected_by_percent"]
-                if ownership > 50:  # Very high ownership
-                    score *= 0.95  # Small penalty for template picks
-                elif ownership < 10:  # Differential
-                    score *= 1.1  # Bonus for differential captain
-
-            return score
+        # Use centralized captain scoring function for consistency
+        def get_captain_score(player):
+            """Wrapper to use centralized captain scoring"""
+            return calculate_captain_score(player, consider_effective_ownership)
 
         # Objective: Maximize expected captain returns
         total_score = pulp.lpSum(
             [
-                captain_vars[player["player_id"]] * calculate_captain_score(player) * 1.0
+                captain_vars[player["player_id"]] * get_captain_score(player) * 1.0
                 + vice_vars[player["player_id"]]
-                * calculate_captain_score(player)
+                * get_captain_score(player)
                 * 0.3  # Vice worth 30%
                 for _, player in team_data.iterrows()
             ]
@@ -471,7 +491,7 @@ class MILPCaptainSelector:
                     "id": player["player_id"],
                     "name": player["player_name"],
                     "team": player.get("team_name", player.get("team", "Unknown")),
-                    "score": calculate_captain_score(player),
+                    "score": get_captain_score(player),
                     "form": player.get("form", 0),
                     "fixture_difficulty": player.get("fixture_difficulty", 3),
                 }
@@ -480,7 +500,7 @@ class MILPCaptainSelector:
                     "id": player["player_id"],
                     "name": player["player_name"],
                     "team": player.get("team_name", player.get("team", "Unknown")),
-                    "score": calculate_captain_score(player),
+                    "score": get_captain_score(player),
                     "form": player.get("form", 0),
                     "fixture_difficulty": player.get("fixture_difficulty", 3),
                 }

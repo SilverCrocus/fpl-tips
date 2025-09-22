@@ -15,10 +15,13 @@ import pandas as pd
 from .chip_strategy import StrategicChipAdvisor
 
 # Import MILP components
-from .milp_team_manager import MILPCaptainSelector, MILPChipAdvisor, MILPTransferOptimizer
+from .milp_team_manager import MILPCaptainSelector, MILPTransferOptimizer
 
 # Import strategic transfer evaluator
 from .transfer_strategy import StrategicTransferEvaluator
+
+# Import centralized captain scorer
+from .captain_scorer import calculate_captain_score
 
 logger = logging.getLogger(__name__)
 
@@ -75,9 +78,8 @@ class TeamAnalyzer:
 
         # Overall metrics
         analysis["total_team_value"] = team_data["price"].sum()
-        analysis["total_expected_points"] = team_data.get(
-            "expected_points", team_data["total_points"]
-        ).sum()
+        # Use model_score directly - no fallback logic per policy
+        analysis["total_expected_points"] = team_data["model_score"].sum()
         analysis["average_ownership"] = team_data["selected_by_percent"].mean()
 
         # Position breakdown
@@ -143,13 +145,11 @@ class TeamAnalyzer:
         # Add lineup score based on form, availability, and fixtures
         team_data["lineup_score"] = 0
 
-        # Base score from form and expected points
+        # Base score from form and model_score - no fallback per policy
         if "form" in team_data.columns:
             team_data["lineup_score"] += team_data["form"] * 2
-        if "expected_points" in team_data.columns:
-            team_data["lineup_score"] += team_data["expected_points"]
-        elif "total_points" in team_data.columns:
-            team_data["lineup_score"] += team_data["total_points"] / 10
+        # Use model_score for lineup decisions
+        team_data["lineup_score"] += team_data["model_score"]
 
         # Penalize for difficult fixtures
         if "fixture_difficulty" in team_data.columns:
@@ -162,9 +162,7 @@ class TeamAnalyzer:
             team_data.loc[team_data["is_available"] == 0, "lineup_score"] *= 0.1
 
         # Separate by position
-        gkp = team_data[team_data["position"] == "GK"].sort_values(
-            "lineup_score", ascending=False
-        )
+        gkp = team_data[team_data["position"] == "GK"].sort_values("lineup_score", ascending=False)
         defs = team_data[team_data["position"] == "DEF"].sort_values(
             "lineup_score", ascending=False
         )
@@ -319,9 +317,7 @@ class TeamAnalyzer:
             ].to_dict("records"),
         }
 
-    def _analyze_captain(
-        self, team_data: pd.DataFrame, captain_id: int
-    ) -> dict:
+    def _analyze_captain(self, team_data: pd.DataFrame, captain_id: int) -> dict:
         """Analyze captain choice using MILP optimization
 
         Args:
@@ -362,9 +358,7 @@ class TeamAnalyzer:
             is_optimal = True
 
         # Create top_3_options format for display
-        top_options = [
-            {"player": result["captain"]["name"], "score": result["captain"]["score"]}
-        ]
+        top_options = [{"player": result["captain"]["name"], "score": result["captain"]["score"]}]
 
         if result.get("vice_captain"):
             top_options.append(
@@ -386,9 +380,17 @@ class TeamAnalyzer:
                 ~team_scored["player_id"].isin([id for id in exclude_ids if id])
             ]
             if not other_options.empty:
-                third = other_options.nlargest(1, "model_score").iloc[0]
+                # Calculate captain scores for remaining players
+                other_options_with_captain_score = other_options.copy()
+                other_options_with_captain_score["captain_score"] = (
+                    other_options_with_captain_score.apply(
+                        lambda row: calculate_captain_score(row, consider_effective_ownership=True),
+                        axis=1,
+                    )
+                )
+                third = other_options_with_captain_score.nlargest(1, "captain_score").iloc[0]
                 top_options.append(
-                    {"player": third["player_name"], "score": third["model_score"]}
+                    {"player": third["player_name"], "score": third["captain_score"]}
                 )
 
         return {
@@ -411,9 +413,7 @@ class TeamAnalyzer:
             "top_3_options": top_options,
             "method": "MILP optimization",
             "message": (
-                "Optimal"
-                if is_optimal
-                else f"Consider switching to {result['captain']['name']}"
+                "Optimal" if is_optimal else f"Consider switching to {result['captain']['name']}"
             ),
         }
 
@@ -446,9 +446,6 @@ class TeamAnalyzer:
             if not new_player_data.empty:
                 new_team_data = pd.concat([new_team_data, new_player_data], ignore_index=True)
 
-        # Score the new team to get model_score
-        new_team_data = self.scorer.score_all_players(new_team_data)
-        
         # Check if current captain is still in the team
         captain_in_new_team = current_captain_id in new_team_data["player_id"].values
 
@@ -590,9 +587,7 @@ class TeamAnalyzer:
         # Initialize strategic evaluator
         strategic_evaluator = StrategicTransferEvaluator(self.data, self.scorer)
 
-        for i, (player_out, player_in) in enumerate(
-            zip(result.transfers_out, result.transfers_in)
-        ):
+        for i, (player_out, player_in) in enumerate(zip(result.transfers_out, result.transfers_in)):
             # Get full player data for reason generation
             out_data = self.data[self.data["player_id"] == player_out["id"]]
             in_data = self.data[self.data["player_id"] == player_in["id"]]
@@ -607,9 +602,7 @@ class TeamAnalyzer:
                     out_data.iloc[0], in_data.iloc[0], is_free_transfer
                 )
             else:
-                reason = (
-                    f"Upgrade: {player_in['score']:.1f} vs {player_out['score']:.1f} score"
-                )
+                reason = f"Upgrade: {player_in['score']:.1f} vs {player_out['score']:.1f} score"
                 priority = 2
                 hit_evaluation = None
 
